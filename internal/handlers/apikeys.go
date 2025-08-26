@@ -1,330 +1,322 @@
 package handlers
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"net/http"
-	"strconv"
-	"strings"
-	"time"
+    "crypto/rand"
+    "encoding/hex"
+    "encoding/json"
+    "fmt"
+    "net/http"
+    "strconv"
+    "strings"
+    "time"
 
-	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
-	"secrets-vault-backend/internal/models"
+    "github.com/gin-gonic/gin"
+    "gorm.io/gorm"
+    "secrets-vault-backend/internal/database"
+    "secrets-vault-backend/internal/models"
+)
+
+const (
+    userKeysPrefix = "uk:%d:%d:%d:%s"
+    keyValidPrefix = "kv:%s"
+    keyCountPrefix = "kc:%d"
+    cacheTTL       = 10 * time.Minute
+    validTTL       = time.Hour
+    shortTTL       = 5 * time.Minute
 )
 
 func GetAPIKeys(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized access"})
-			return
-		}
+    return func(c *gin.Context) {
+        user := c.MustGet("user").(models.User)
+        page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+        limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+        status := c.Query("status")
+        
+        cacheKey := fmt.Sprintf(userKeysPrefix, user.ID, page, limit, status)
+        
+        if cached, err := database.Get(cacheKey); err == nil {
+            var resp gin.H
+            json.Unmarshal([]byte(cached), &resp)
+            resp["cached"] = true
+            c.JSON(http.StatusOK, resp)
+            return
+        }
 
-		u := user.(models.User)
-		var apiKeys []models.APIKey
+        offset := (page - 1) * limit
+        query := db.Where("user_id = ?", user.ID).Order("created_at DESC").Limit(limit).Offset(offset)
+        
+        switch status {
+        case "active":
+            query = query.Where("is_active = ?", true)
+        case "inactive":
+            query = query.Where("is_active = ?", false)
+        }
 
-		page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-		offset := (page - 1) * limit
+        var keys []models.APIKey
+        query.Find(&keys)
 
-		query := db.Where("user_id = ?", u.ID).
-			Order("created_at DESC").
-			Limit(limit).
-			Offset(offset)
+        for i := range keys {
+            if len(keys[i].Key) > 8 {
+                keys[i].Key = keys[i].Key[:8] + "..."
+            }
+        }
 
-		if status := c.Query("status"); status == "active" {
-			query = query.Where("is_active = ?", true)
-		} else if status == "inactive" {
-			query = query.Where("is_active = ?", false)
-		}
+        var total int64
+        countQuery := db.Model(&models.APIKey{}).Where("user_id = ?", user.ID)
+        switch status {
+        case "active":
+            countQuery = countQuery.Where("is_active = ?", true)
+        case "inactive":
+            countQuery = countQuery.Where("is_active = ?", false)
+        }
+        countQuery.Count(&total)
 
-		if err := query.Find(&apiKeys).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve API keys"})
-			return
-		}
-		for i := range apiKeys {
-			if len(apiKeys[i].Key) > 8 {
-				apiKeys[i].Key = apiKeys[i].Key[:8] + "..."
-			}
-		}
+        resp := gin.H{
+            "api_keys":   keys,
+            "pagination": gin.H{"page": page, "limit": limit, "total": total},
+            "cached":     false,
+        }
 
-		var total int64
-		countQuery := db.Model(&models.APIKey{}).Where("user_id = ?", u.ID)
-		if status := c.Query("status"); status == "active" {
-			countQuery = countQuery.Where("is_active = ?", true)
-		} else if status == "inactive" {
-			countQuery = countQuery.Where("is_active = ?", false)
-		}
-		countQuery.Count(&total)
+        if data, _ := json.Marshal(resp); data != nil {
+            database.Set(cacheKey, data, cacheTTL)
+        }
 
-		c.JSON(http.StatusOK, gin.H{
-			"api_keys": apiKeys,
-			"pagination": gin.H{
-				"page":  page,
-				"limit": limit,
-				"total": total,
-			},
-		})
-	}
+        c.JSON(http.StatusOK, resp)
+    }
 }
 
 func CreateAPIKey(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized access"})
-			return
-		}
+    return func(c *gin.Context) {
+        user := c.MustGet("user").(models.User)
+        var req models.CreateAPIKeyRequest
 
-		u := user.(models.User)
-		var req models.CreateAPIKeyRequest
+        if c.ShouldBindJSON(&req) != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+            return
+        }
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format", "details": err.Error()})
-			return
-		}
+        req.Name = strings.TrimSpace(req.Name)
+        if req.Name == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Name required"})
+            return
+        }
 
-		if strings.TrimSpace(req.Name) == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "API key name is required"})
-			return
-		}
+        var exists models.APIKey
+        if db.Where("user_id = ? AND name = ?", user.ID, req.Name).First(&exists).Error == nil {
+            c.JSON(http.StatusConflict, gin.H{"error": "Name exists"})
+            return
+        }
 
-		var existingKey models.APIKey
-		if err := db.Where("user_id = ? AND name = ?", u.ID, req.Name).First(&existingKey).Error; err == nil {
-			c.JSON(http.StatusConflict, gin.H{"error": "API key with this name already exists"})
-			return
-		}
+        countKey := fmt.Sprintf(keyCountPrefix, user.ID)
+        var count int64
+        
+        if cached, err := database.Get(countKey); err == nil {
+            count, _ = strconv.ParseInt(cached, 10, 64)
+        } else {
+            db.Model(&models.APIKey{}).Where("user_id = ? AND is_active = ?", user.ID, true).Count(&count)
+            database.Set(countKey, count, shortTTL)
+        }
 
-		var keyCount int64
-		db.Model(&models.APIKey{}).Where("user_id = ? AND is_active = ?", u.ID, true).Count(&keyCount)
-		if keyCount >= 10 { // Limit to 10 active keys per user
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Maximum number of API keys reached (10)"})
-			return
-		}
+        if count >= 10 {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Limit reached"})
+            return
+        }
 
-		keyBytes := make([]byte, 32)
-		if _, err := rand.Read(keyBytes); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate secure API key"})
-			return
-		}
+        keyBytes := make([]byte, 32)
+        rand.Read(keyBytes)
+        keyString := "svp_" + hex.EncodeToString(keyBytes)
 
-		apiKeyString := "sm_" + hex.EncodeToString(keyBytes)
+        key := models.APIKey{
+            UserID:    user.ID,
+            Name:      req.Name,
+            Key:       keyString,
+            IsActive:  true,
+            CreatedAt: time.Now(),
+            UpdatedAt: time.Now(),
+        }
 
-		var existingKeyCheck models.APIKey
-		for {
-			if err := db.Where("key = ?", apiKeyString).First(&existingKeyCheck).Error; err != nil {
-				break
-			}
-			rand.Read(keyBytes)
-			apiKeyString = "svp_" + hex.EncodeToString(keyBytes)
-		}
+        if db.Create(&key).Error != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Creation failed"})
+            return
+        }
 
-		apiKey := models.APIKey{
-			UserID:    u.ID,
-			Name:      strings.TrimSpace(req.Name),
-			Key:       apiKeyString,
-			IsActive:  true,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		}
+        pipe := database.Pipeline()
+        pipe.Del(c, fmt.Sprintf("uk:%d:*", user.ID))
+        pipe.Set(c, countKey, count+1, shortTTL)
+        pipe.Set(c, fmt.Sprintf(keyValidPrefix, keyString), user.ID, validTTL)
+        pipe.Exec(c)
 
-		if err := db.Create(&apiKey).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save API key"})
-			return
-		}
-
-		c.JSON(http.StatusCreated, gin.H{
-			"message": "API key created successfully",
-			"api_key": gin.H{
-				"id":         apiKey.ID,
-				"name":       apiKey.Name,
-				"key":        apiKey.Key,
-				"is_active":  apiKey.IsActive,
-				"created_at": apiKey.CreatedAt,
-			},
-			"warning": "This is the only time the full API key will be displayed. Store it securely.",
-		})
-	}
+        c.JSON(http.StatusCreated, gin.H{
+            "api_key": gin.H{
+                "id":         key.ID,
+                "name":       key.Name,
+                "key":        key.Key,
+                "is_active":  true,
+                "created_at": key.CreatedAt,
+            },
+            "warning": "Store securely - shown only once",
+        })
+    }
 }
 
 func UpdateAPIKey(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized access"})
-			return
-		}
+    return func(c *gin.Context) {
+        user := c.MustGet("user").(models.User)
+        keyID := c.Param("id")
 
-		u := user.(models.User)
-		keyID := c.Param("id")
+        var key models.APIKey
+        if db.Where("id = ? AND user_id = ?", keyID, user.ID).First(&key).Error != nil {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+            return
+        }
 
-		var apiKey models.APIKey
-		if err := db.Where("id = ? AND user_id = ?", keyID, u.ID).First(&apiKey).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-			}
-			return
-		}
+        wasActive := key.IsActive
+        var req struct {
+            Name     string `json:"name"`
+            IsActive *bool  `json:"is_active"`
+        }
 
-		var req struct {
-			Name     string `json:"name"`
-			IsActive *bool  `json:"is_active"`
-		}
+        if c.ShouldBindJSON(&req) != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid format"})
+            return
+        }
 
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request format"})
-			return
-		}
+        if req.Name != "" {
+            req.Name = strings.TrimSpace(req.Name)
+            var exists models.APIKey
+            if db.Where("user_id = ? AND name = ? AND id != ?", user.ID, req.Name, keyID).First(&exists).Error == nil {
+                c.JSON(http.StatusConflict, gin.H{"error": "Name exists"})
+                return
+            }
+            key.Name = req.Name
+        }
 
-		if req.Name != "" {
-			var existingKey models.APIKey
-			if err := db.Where("user_id = ? AND name = ? AND id != ?", u.ID, req.Name, keyID).First(&existingKey).Error; err == nil {
-				c.JSON(http.StatusConflict, gin.H{"error": "API key with this name already exists"})
-				return
-			}
-			apiKey.Name = strings.TrimSpace(req.Name)
-		}
+        if req.IsActive != nil {
+            key.IsActive = *req.IsActive
+            if *req.IsActive {
+                now := time.Now()
+                key.LastUsed = &now
+            }
+        }
 
-		if req.IsActive != nil {
-			apiKey.IsActive = *req.IsActive
-			
-			if *req.IsActive {
-				now := time.Now()
-				apiKey.LastUsed = &now
-			}
-		}
+        key.UpdatedAt = time.Now()
+        db.Save(&key)
 
-		apiKey.UpdatedAt = time.Now()
+        pipe := database.Pipeline()
+        pipe.Del(c, fmt.Sprintf("uk:%d:*", user.ID))
+        
+        if wasActive && req.IsActive != nil && !*req.IsActive {
+            pipe.Del(c, fmt.Sprintf(keyValidPrefix, key.Key))
+            pipe.Del(c, fmt.Sprintf(keyCountPrefix, user.ID))
+        } else if !wasActive && req.IsActive != nil && *req.IsActive {
+            pipe.Set(c, fmt.Sprintf(keyValidPrefix, key.Key), user.ID, validTTL)
+        }
+        pipe.Exec(c)
 
-		if err := db.Save(&apiKey).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update API key"})
-			return
-		}
-
-		apiKey.Key = "Hidden for security"
-		c.JSON(http.StatusOK, gin.H{
-			"message": "API key updated successfully",
-			"api_key": apiKey,
-		})
-	}
+        key.Key = "Hidden"
+        c.JSON(http.StatusOK, gin.H{"api_key": key})
+    }
 }
 
 func DeleteAPIKey(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized access"})
-			return
-		}
+    return func(c *gin.Context) {
+        user := c.MustGet("user").(models.User)
+        keyID := c.Param("id")
 
-		u := user.(models.User)
-		keyID := c.Param("id")
+        var key models.APIKey
+        if db.Where("id = ? AND user_id = ?", keyID, user.ID).First(&key).Error != nil {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+            return
+        }
 
-		var apiKey models.APIKey
-		if err := db.Where("id = ? AND user_id = ?", keyID, u.ID).First(&apiKey).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-			}
-			return
-		}
+        originalKey := key.Key
+        db.Delete(&key)
 
-		if err := db.Delete(&apiKey).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete API key"})
-			return
-		}
+        database.Del(
+            fmt.Sprintf("uk:%d:*", user.ID),
+            fmt.Sprintf(keyValidPrefix, originalKey),
+            fmt.Sprintf(keyCountPrefix, user.ID),
+        )
 
-		c.JSON(http.StatusOK, gin.H{
-			"message": "API key deleted successfully",
-			"id":      keyID,
-			"name":    apiKey.Name,
-		})
-	}
+        c.JSON(http.StatusOK, gin.H{"id": keyID, "name": key.Name})
+    }
 }
 
 func ValidateAPIKey(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		apiKey := c.GetHeader("X-API-Key")
-		if apiKey == "" {
-			auth := c.GetHeader("Authorization")
-			if strings.HasPrefix(auth, "Bearer ") {
-				apiKey = strings.TrimPrefix(auth, "Bearer ")
-			}
-		}
+    return func(c *gin.Context) {
+        key := c.GetHeader("X-API-Key")
+        if key == "" {
+            if auth := c.GetHeader("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+                key = strings.TrimPrefix(auth, "Bearer ")
+            }
+        }
 
-		if apiKey == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "API key required"})
-			c.Abort()
-			return
-		}
+        if key == "" || !strings.HasPrefix(key, "svp_") || len(key) != 68 {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid key"})
+            c.Abort()
+            return
+        }
 
-		if !strings.HasPrefix(apiKey, "svp_") || len(apiKey) != 68 { // svp_ + 64 hex chars
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key format"})
-			c.Abort()
-			return
-		}
+        validKey := fmt.Sprintf(keyValidPrefix, key)
+        if userIDStr, err := database.Get(validKey); err == nil {
+            if userID, err := strconv.Atoi(userIDStr); err == nil {
+                var user models.User
+                if db.First(&user, userID).Error == nil {
+                    c.Set("user", user)
+                    c.Next()
+                    return
+                }
+            }
+        }
 
-		var keyRecord models.APIKey
-		if err := db.Where("key = ? AND is_active = ?", apiKey, true).First(&keyRecord).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or inactive API key"})
-			c.Abort()
-			return
-		}
+        var keyRecord models.APIKey
+        if db.Where("key = ? AND is_active = ?", key, true).First(&keyRecord).Error != nil {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid key"})
+            c.Abort()
+            return
+        }
 
-		now := time.Now()
-		keyRecord.LastUsed = &now
-		db.Save(&keyRecord)
+        now := time.Now()
+        keyRecord.LastUsed = &now
+        go db.Save(&keyRecord)
 
-		var user models.User
-		if err := db.First(&user, keyRecord.UserID).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
-			c.Abort()
-			return
-		}
+        var user models.User
+        if db.First(&user, keyRecord.UserID).Error != nil {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+            c.Abort()
+            return
+        }
 
-		c.Set("user", user)
-		c.Set("api_key", keyRecord)
-		c.Next()
-	}
+        database.Set(validKey, user.ID, validTTL)
+
+        c.Set("user", user)
+        c.Set("api_key", keyRecord)
+        c.Next()
+    }
 }
 
 func RevokeAPIKey(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized access"})
-			return
-		}
+    return func(c *gin.Context) {
+        user := c.MustGet("user").(models.User)
+        keyID := c.Param("id")
 
-		u := user.(models.User)
-		keyID := c.Param("id")
+        var key models.APIKey
+        if db.Where("id = ? AND user_id = ?", keyID, user.ID).First(&key).Error != nil {
+            c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+            return
+        }
 
-		var apiKey models.APIKey
-		if err := db.Where("id = ? AND user_id = ?", keyID, u.ID).First(&apiKey).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
-			} else {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
-			}
-			return
-		}
+        originalKey := key.Key
+        key.IsActive = false
+        key.UpdatedAt = time.Now()
+        db.Save(&key)
 
-		apiKey.IsActive = false
-		apiKey.UpdatedAt = time.Now()
+        database.Del(
+            fmt.Sprintf("uk:%d:*", user.ID),
+            fmt.Sprintf(keyValidPrefix, originalKey),
+            fmt.Sprintf(keyCountPrefix, user.ID),
+        )
 
-		if err := db.Save(&apiKey).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API key"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"message": "API key revoked successfully",
-			"id":      keyID,
-			"name":    apiKey.Name,
-		})
-	}
+        c.JSON(http.StatusOK, gin.H{"id": keyID, "name": key.Name})
+    }
 }

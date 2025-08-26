@@ -3,7 +3,10 @@ package main
 import (
     "log"
     "os"
+    "time"
 
+    "github.com/gin-contrib/cache"
+    "github.com/gin-contrib/cache/persistence"
     "github.com/gin-gonic/gin"
     "github.com/joho/godotenv"
     "secrets-vault-backend/internal/config"
@@ -24,6 +27,10 @@ func main() {
         log.Fatalf("Failed to initialize database: %v", err)
     }
 
+    database.InitializeRedis(cfg)
+
+    redisStore := persistence.NewRedisCacheWithURL(cfg.Redis.URL, time.Hour)
+
     gin.SetMode(gin.ReleaseMode)
     if os.Getenv("GIN_MODE") == "debug" {
         gin.SetMode(gin.DebugMode)
@@ -35,9 +42,9 @@ func main() {
     router.Use(middleware.CORS())
     router.Use(gin.Recovery())
 
-    router.GET("/health", func(c *gin.Context) {
+    router.GET("/health", cache.CachePage(redisStore, 30*time.Second, func(c *gin.Context) {
         c.JSON(200, gin.H{"status": "ok"})
-    })
+    }))
 
     api := router.Group("/api/v1")
     {
@@ -47,7 +54,6 @@ func main() {
             auth.POST("/login", handlers.Login(db))
         }
 
-        // JWT Protected routes
         protected := api.Group("/")
         protected.Use(middleware.AuthRequired(db))
         {
@@ -60,9 +66,8 @@ func main() {
             protected.DELETE("/apikeys/:id", handlers.DeleteAPIKey(db))
         }
 
-        // API Key Protected routes (for CLI access)
         apiProtected := api.Group("/")
-        apiProtected.Use(middleware.ValidateAPIKey(db))
+        apiProtected.Use(handlers.ValidateAPIKey(db))
         {
             apiProtected.GET("/secrets", handlers.GetSecrets(db))
         }
