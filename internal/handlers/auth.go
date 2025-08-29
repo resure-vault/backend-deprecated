@@ -9,6 +9,7 @@ import (
     "net/http"
     "os"
     "strings"
+    "time"
 
     "secrets-vault-backend/internal/models"
     "secrets-vault-backend/internal/utils"
@@ -57,6 +58,61 @@ func sendPasswordEmail(email, name, password, masterPassword string) error {
     return err
 }
 
+func sendLoginNotificationEmail(email, name, ipAddress, userAgent string) error {
+    apiKey := os.Getenv("RESEND_API_KEY")
+    if apiKey == "" {
+        return errors.New("RESEND_API_KEY not set")
+    }
+
+    client := resend.NewClient(apiKey)
+
+    loginTime := time.Now().Format("January 2, 2006 at 3:04 PM MST")
+    
+    subject := "New Login to Your Secured Account"
+    htmlContent := fmt.Sprintf(`
+    <h2>Hello %s,</h2>
+    <p>We detected a new login to your Secured account.</p>
+    
+    <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h3>Login Details:</h3>
+        <p><strong>Time:</strong> %s</p>
+        <p><strong>IP Address:</strong> %s</p>
+        <p><strong>Device/Browser:</strong> %s</p>
+    </div>
+
+    <p><strong>Was this you?</strong></p>
+    <p>If this was you, no action is needed.</p>
+    <p>If this wasn't you, please secure your account immediately by resetting your password.</p>
+    
+    <p>For security reasons, we recommend:</p>
+    <ul>
+        <li>Using strong, unique passwords</li>
+        <li>Enabling two-factor authentication when available</li>
+        <li>Regularly monitoring your account activity</li>
+    </ul>
+    
+    <p>If you have any concerns about your account security, please contact our support team.</p>
+    
+    <p>Stay secure,<br>
+    Secured Team</p>
+    
+    <hr style="margin-top: 30px;">
+    <p style="font-size: 12px; color: #666;">
+        This is an automated security notification. Please do not reply to this email.
+    </p>
+    `, name, loginTime, ipAddress, userAgent)
+
+    params := &resend.SendEmailRequest{
+        From:    "Secured Security <security@yssh.dev>",
+        To:      []string{email},
+        Subject: subject,
+        Html:    htmlContent,
+    }
+
+    _, err := client.Emails.Send(params)
+    return err
+}
+
 func addToResendAudience(email, name string) error {
     apiKey := os.Getenv("RESEND_API_KEY")
     audienceId := os.Getenv("RESEND_AUDIENCE_ID")
@@ -75,6 +131,22 @@ func addToResendAudience(email, name string) error {
 
     _, err := client.Contacts.Create(params)
     return err
+}
+
+func getClientIP(c *gin.Context) string {
+    clientIP := c.ClientIP()
+    if clientIP == "" {
+        clientIP = "Unknown"
+    }
+    return clientIP
+}
+
+func getUserAgent(c *gin.Context) string {
+    userAgent := c.GetHeader("User-Agent")
+    if userAgent == "" {
+        userAgent = "Unknown Browser/Device"
+    }
+    return userAgent
 }
 
 func Signup(db *gorm.DB) gin.HandlerFunc {
@@ -215,6 +287,13 @@ func Login(db *gorm.DB) gin.HandlerFunc {
             log.Printf("failed to generate token: %v", err)
             c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
             return
+        }
+
+        clientIP := getClientIP(c)
+        userAgent := getUserAgent(c)
+        
+        if err := sendLoginNotificationEmail(user.Email, user.Name, clientIP, userAgent); err != nil {
+            log.Printf("failed to send login notification email: %v", err)
         }
 
         c.JSON(http.StatusOK, models.LoginResponse{
