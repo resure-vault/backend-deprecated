@@ -1,137 +1,296 @@
 package handlers
 
 import (
-	"errors"
-	"log"
-	"net/http"
-	"strings"
+    "crypto/rand"
+    "encoding/base64"
+    "errors"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "strings"
 
-	"secrets-vault-backend/internal/models"
-	"secrets-vault-backend/internal/utils"
+    "secrets-vault-backend/internal/models"
+    "secrets-vault-backend/internal/utils"
 
-	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgconn"
-	"gorm.io/gorm"
+    "github.com/gin-gonic/gin"
+    "github.com/jackc/pgconn"
+    "github.com/resend/resend-go/v2"
+    "gorm.io/gorm"
 )
 
+func generateRandomPassword(length int) (string, error) {
+    bytes := make([]byte, length)
+    if _, err := rand.Read(bytes); err != nil {
+        return "", err
+    }
+    return base64.URLEncoding.EncodeToString(bytes)[:length], nil
+}
+
+func sendPasswordEmail(email, name, password, masterPassword string) error {
+    apiKey := os.Getenv("RESEND_API_KEY")
+    if apiKey == "" {
+        return errors.New("RESEND_API_KEY not set")
+    }
+
+    client := resend.NewClient(apiKey)
+
+    subject := "Welcome to Secured - Your Account Credentials"
+    htmlContent := fmt.Sprintf(`
+    <h2>Welcome to Secured, %s!</h2>
+    <p>Your account has been created successfully. Here are your credentials:</p>
+    <p><strong>Email:</strong> %s</p>
+    <p><strong>Password:</strong> %s</p>
+    <p><strong>Master Password:</strong> %s</p>
+    <p><em>Please keep these credentials safe and secure.</em></p>
+    <p>You can now login to your account at Secured.</p>
+    `, name, email, password, masterPassword)
+
+    params := &resend.SendEmailRequest{
+        From:    "Secured <noreply@yssh.dev>",
+        To:      []string{email},
+        Subject: subject,
+        Html:    htmlContent,
+    }
+
+    _, err := client.Emails.Send(params)
+    return err
+}
+
+func addToResendAudience(email, name string) error {
+    apiKey := os.Getenv("RESEND_API_KEY")
+    audienceId := os.Getenv("RESEND_AUDIENCE_ID")
+    
+    if apiKey == "" || audienceId == "" {
+        return errors.New("RESEND_API_KEY or RESEND_AUDIENCE_ID not set")
+    }
+
+    client := resend.NewClient(apiKey)
+
+    params := &resend.CreateContactRequest{
+        Email:      email,
+        FirstName:  name,
+        AudienceId: audienceId,
+    }
+
+    _, err := client.Contacts.Create(params)
+    return err
+}
+
 func Signup(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req models.SignupRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
+    return func(c *gin.Context) {
+        var req models.SignupRequest
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+            return
+        }
 
-		// hash passwords before creating the user
-		hashedPassword, err := utils.HashPassword(req.Password)
-		if err != nil {
-			log.Printf("error hashing password: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
-			return
-		}
+        password, err := generateRandomPassword(12)
+        if err != nil {
+            log.Printf("error generating password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-		hashedMasterPassword, err := utils.HashPassword(req.MasterPassword)
-		if err != nil {
-			log.Printf("error hashing master password: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
-			return
-		}
+        masterPassword, err := generateRandomPassword(16)
+        if err != nil {
+            log.Printf("error generating master password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-		user := models.User{
-			Email:              req.Email,
-			Password:           hashedPassword,
-			MasterPasswordHash: hashedMasterPassword,
-		}
+        hashedPassword, err := utils.HashPassword(password)
+        if err != nil {
+            log.Printf("error hashing password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-		tx := db.Begin()
-		if tx.Error != nil {
-			log.Printf("failed to begin transaction: %v", tx.Error)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
-			return
-		}
+        hashedMasterPassword, err := utils.HashPassword(masterPassword)
+        if err != nil {
+            log.Printf("error hashing master password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-		if err := tx.Create(&user).Error; err != nil {
-			tx.Rollback()
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) {
-				if pgErr.Code == "23505" {
-					c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
-					return
-				}
-			}
+        user := models.User{
+            Name:               req.Name,
+            Email:              req.Email,
+            Password:           hashedPassword,
+            MasterPasswordHash: hashedMasterPassword,
+        }
 
-			msg := strings.ToLower(err.Error())
-			if strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique") {
-				c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
-				return
-			}
+        tx := db.Begin()
+        if tx.Error != nil {
+            log.Printf("failed to begin transaction: %v", tx.Error)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-			log.Printf("failed to create user: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
-			return
-		}
+        if err := tx.Create(&user).Error; err != nil {
+            tx.Rollback()
+            var pgErr *pgconn.PgError
+            if errors.As(err, &pgErr) {
+                if pgErr.Code == "23505" {
+                    c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
+                    return
+                }
+            }
 
-		if err := tx.Commit().Error; err != nil {
-			log.Printf("failed to commit transaction: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
-			return
-		}
+            msg := strings.ToLower(err.Error())
+            if strings.Contains(msg, "duplicate") || strings.Contains(msg, "unique") {
+                c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
+                return
+            }
 
-		// issue jwt token
-		token, err := utils.GenerateJWT(user.ID)
-		if err != nil {
-			log.Printf("failed to generate token: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-			return
-		}
+            log.Printf("failed to create user: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+            return
+        }
 
-		c.JSON(http.StatusCreated, models.LoginResponse{
-			User:  user,
-			Token: token,
-		})
-	}
+        if err := tx.Commit().Error; err != nil {
+            log.Printf("failed to commit transaction: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create user"})
+            return
+        }
+
+        if err := sendPasswordEmail(user.Email, user.Name, password, masterPassword); err != nil {
+            log.Printf("failed to send password email: %v", err)
+        }
+
+        if err := addToResendAudience(user.Email, user.Name); err != nil {
+            log.Printf("failed to add to resend audience: %v", err)
+        }
+
+        token, err := utils.GenerateJWT(user.ID)
+        if err != nil {
+            log.Printf("failed to generate token: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+            return
+        }
+
+        c.JSON(http.StatusCreated, models.LoginResponse{
+            User:  user,
+            Token: token,
+        })
+    }
 }
 
 func Login(db *gorm.DB) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		var req models.LoginRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
+    return func(c *gin.Context) {
+        var req models.LoginRequest
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+            return
+        }
 
-		var user models.User
-		if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-				return
-			}
-			// other db error
-			log.Printf("db error during login lookup: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
-			return
-		}
+        var user models.User
+        if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+            if errors.Is(err, gorm.ErrRecordNotFound) {
+                c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+                return
+            }
+            log.Printf("db error during login lookup: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
 
-		if !utils.CheckPasswordHash(req.Password, user.Password) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
-			return
-		}
+        if user.Password == "" {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Account not activated. Please check your email."})
+            return
+        }
 
-		if !utils.CheckPasswordHash(req.MasterPassword, user.MasterPasswordHash) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid master password"})
-			return
-		}
+        if !utils.CheckPasswordHash(req.Password, user.Password) {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
+            return
+        }
 
-		token, err := utils.GenerateJWT(user.ID)
-		if err != nil {
-			log.Printf("failed to generate token: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
-			return
-		}
+        if !utils.CheckPasswordHash(req.MasterPassword, user.MasterPasswordHash) {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid master password"})
+            return
+        }
 
-		c.JSON(http.StatusOK, models.LoginResponse{
-			User:  user,
-			Token: token,
-		})
-	}
+        token, err := utils.GenerateJWT(user.ID)
+        if err != nil {
+            log.Printf("failed to generate token: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+            return
+        }
+
+        c.JSON(http.StatusOK, models.LoginResponse{
+            User:  user,
+            Token: token,
+        })
+    }
+}
+
+func ForgotPassword(db *gorm.DB) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        var req models.ForgotPasswordRequest
+        if err := c.ShouldBindJSON(&req); err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+            return
+        }
+
+        var user models.User
+        if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+            if errors.Is(err, gorm.ErrRecordNotFound) {
+                c.JSON(http.StatusNotFound, gin.H{"error": "Email not registered"})
+                return
+            }
+            log.Printf("db error during forgot password lookup: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
+
+        if user.Password == "" {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "Email not registered"})
+            return
+        }
+
+        password, err := generateRandomPassword(12)
+        if err != nil {
+            log.Printf("error generating password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
+
+        masterPassword, err := generateRandomPassword(16)
+        if err != nil {
+            log.Printf("error generating master password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
+
+        hashedPassword, err := utils.HashPassword(password)
+        if err != nil {
+            log.Printf("error hashing password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
+
+        hashedMasterPassword, err := utils.HashPassword(masterPassword)
+        if err != nil {
+            log.Printf("error hashing master password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+            return
+        }
+
+        if err := db.Model(&user).Updates(models.User{
+            Password:           hashedPassword,
+            MasterPasswordHash: hashedMasterPassword,
+        }).Error; err != nil {
+            log.Printf("failed to update user password: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset password"})
+            return
+        }
+
+        if err := sendPasswordEmail(user.Email, user.Name, password, masterPassword); err != nil {
+            log.Printf("failed to send password email: %v", err)
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send password email"})
+            return
+        }
+
+        c.JSON(http.StatusOK, gin.H{"message": "New password sent to your email"})
+    }
 }
