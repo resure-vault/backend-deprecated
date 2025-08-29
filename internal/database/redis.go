@@ -40,7 +40,7 @@ func InitializeRedis(cfg *config.Config) {
         log.Fatalf("Failed to connect to Redis: %v", err)
     }
     
-    log.Println("Redis connected")
+    log.Println("Redis connected successfully")
 }
 
 func Set(key string, value interface{}, exp time.Duration) error {

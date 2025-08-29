@@ -7,6 +7,7 @@ require (
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.10.1
 	github.com/golang-jwt/jwt/v4 v4.5.2
+	github.com/jackc/pgconn v1.14.3
 	github.com/joho/godotenv v1.5.1
 	github.com/redis/go-redis/v9 v9.12.1
 	golang.org/x/crypto v0.39.0
@@ -29,7 +30,6 @@ require (
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gomodule/redigo v1.9.2 // indirect
 	github.com/jackc/chunkreader/v2 v2.0.1 // indirect
-	github.com/jackc/pgconn v1.14.3 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgproto3/v2 v2.3.3 // indirect
