@@ -1,19 +1,20 @@
 package handlers
 
 import (
-	"errors"
-	"log"
-	"net/http"
-	"strings"
-
-	"secrets-vault-backend/internal/models"
-	"secrets-vault-backend/internal/utils"
-
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
+
+	"secrets-vault-backend/internal/database"
+	"secrets-vault-backend/internal/models"
+	"secrets-vault-backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgconn"
@@ -73,7 +74,7 @@ func sendLoginNotificationEmail(email, name, ipAddress, userAgent string) error 
 	htmlContent := fmt.Sprintf(`
     <h2>Hello %s,</h2>
     <p>We detected a new login to your Secured account.</p>
-    
+
     <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
         <h3>Login Details:</h3>
         <p><strong>Time:</strong> %s</p>
@@ -84,19 +85,19 @@ func sendLoginNotificationEmail(email, name, ipAddress, userAgent string) error 
     <p><strong>Was this you?</strong></p>
     <p>If this was you, no action is needed.</p>
     <p>If this wasn't you, please secure your account immediately by resetting your password.</p>
-    
+
     <p>For security reasons, we recommend:</p>
     <ul>
         <li>Using strong, unique passwords</li>
         <li>Enabling two-factor authentication when available</li>
         <li>Regularly monitoring your account activity</li>
     </ul>
-    
+
     <p>If you have any concerns about your account security, please contact our support team.</p>
-    
+
     <p>Stay secure,<br>
     Secured Team</p>
-    
+
     <hr style="margin-top: 30px;">
     <p style="font-size: 12px; color: #666;">
         This is an automated security notification. Please do not reply to this email.
@@ -158,6 +159,16 @@ func Signup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// trim inputs to avoid accidental whitespace mismatches
+		req.Email = strings.TrimSpace(req.Email)
+		req.Name = strings.TrimSpace(req.Name)
+
+		if req.Email == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "email is required"})
+			return
+		}
+
+		// always generate credentials for the user (or you could accept sent ones via a different API)
 		password, err := generateRandomPassword(12)
 		if err != nil {
 			log.Printf("error generating password: %v", err)
@@ -172,6 +183,7 @@ func Signup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// hash passwords before creating the user
 		hashedPassword, err := utils.HashPassword(password)
 		if err != nil {
 			log.Printf("error hashing password: %v", err)
@@ -179,9 +191,21 @@ func Signup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		hashedMasterPassword, err := utils.HashPassword(req.MasterPassword)
+		hashedMasterPassword, err := utils.HashPassword(masterPassword)
 		if err != nil {
 			log.Printf("error hashing master password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		// sanity check the generated hashes by verifying they match the original plaintexts
+		if !utils.CheckPasswordHash(password, hashedPassword) {
+			log.Printf("signup: hashed password verification failed (email=%s)", req.Email)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+		if !utils.CheckPasswordHash(masterPassword, hashedMasterPassword) {
+			log.Printf("signup: hashed master password verification failed (email=%s)", req.Email)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
 			return
 		}
@@ -227,6 +251,7 @@ func Signup(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// send credentials email (if we generated credentials or want to inform user)
 		if err := sendPasswordEmail(user.Email, user.Name, password, masterPassword); err != nil {
 			log.Printf("failed to send password email: %v", err)
 		}
@@ -257,12 +282,18 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// trim inputs
+		req.Email = strings.TrimSpace(req.Email)
+		req.Password = strings.TrimSpace(req.Password)
+		req.MasterPassword = strings.TrimSpace(req.MasterPassword)
+
 		var user models.User
 		if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 				return
 			}
+			// other db error
 			log.Printf("db error during login lookup: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
 			return
@@ -301,5 +332,158 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			User:  user,
 			Token: token,
 		})
+	}
+}
+
+func ForgotPassword(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var req struct {
+			Email string `json:"email" binding:"required,email"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var user models.User
+		if err := db.Where("email = ?", req.Email).First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Email not registered"})
+				return
+			}
+			log.Printf("db error during forgot password lookup: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		if user.Password == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Email not registered"})
+			return
+		}
+
+		password, err := generateRandomPassword(12)
+		if err != nil {
+			log.Printf("error generating password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		masterPassword, err := generateRandomPassword(16)
+		if err != nil {
+			log.Printf("error generating master password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		hashedPassword, err := utils.HashPassword(password)
+		if err != nil {
+			log.Printf("error hashing password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		hashedMasterPassword, err := utils.HashPassword(masterPassword)
+		if err != nil {
+			log.Printf("error hashing master password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to process request"})
+			return
+		}
+
+		if err := db.Model(&user).Updates(models.User{
+			Password:           hashedPassword,
+			MasterPasswordHash: hashedMasterPassword,
+		}).Error; err != nil {
+			log.Printf("failed to update user password: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset password"})
+			return
+		}
+
+		if err := sendPasswordEmail(user.Email, user.Name, password, masterPassword); err != nil {
+			log.Printf("failed to send password email: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send password email"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "New password sent to your email"})
+	}
+}
+
+// /me returns current authenticated user's basic information (id and email).
+// this handler will accept either a Bearer JWT or an API key provided via X-API-Key or Authorization header.
+// todo: accept api keys only from cli
+
+func Me(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// if middleware already set the user, return it
+		if u, ok := c.Get("user"); ok {
+			user := u.(models.User)
+			c.JSON(http.StatusOK, gin.H{"id": user.ID, "email": user.Email})
+			return
+		}
+
+		//  try JWT from Authorization: Bearer <token>
+		auth := c.GetHeader("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			tokenString := strings.TrimPrefix(auth, "Bearer ")
+			if claims, err := utils.ValidateJWT(tokenString); err == nil {
+				var user models.User
+				if db.First(&user, claims.UserID).Error == nil {
+					c.JSON(http.StatusOK, gin.H{"id": user.ID, "email": user.Email})
+					return
+				}
+			}
+		}
+
+		// try API key from X-API-Key or Authorization header (Bearer <key> where key starts with svp_)
+		key := c.GetHeader("X-API-Key")
+		if key == "" {
+			// maybe provided as Bearer header (client might send svp_ token as bearer)
+			auth = c.GetHeader("Authorization")
+			if strings.HasPrefix(auth, "Bearer ") {
+				maybe := strings.TrimPrefix(auth, "Bearer ")
+				if strings.HasPrefix(maybe, "svp_") {
+					key = maybe
+				}
+			}
+		}
+
+		if key != "" {
+			if !strings.HasPrefix(key, "svp_") || len(key) != 68 {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid key"})
+				return
+			}
+
+			// check cache first
+			if userIDStr, err := database.Get(fmt.Sprintf(keyValidPrefix, key)); err == nil {
+				if uid, err := strconv.Atoi(userIDStr); err == nil {
+					var user models.User
+					if db.First(&user, uid).Error == nil {
+						c.JSON(http.StatusOK, gin.H{"id": user.ID, "email": user.Email})
+						return
+					}
+				}
+			}
+
+			// fallback db lookup
+			var keyRecord models.APIKey
+			if db.Where("key = ? AND is_active = ?", key, true).First(&keyRecord).Error != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid key"})
+				return
+			}
+
+			var user models.User
+			if db.First(&user, keyRecord.UserID).Error != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+				return
+			}
+
+			// cache valid key
+			database.Set(fmt.Sprintf(keyValidPrefix, key), user.ID, validTTL)
+
+			c.JSON(http.StatusOK, gin.H{"id": user.ID, "email": user.Email})
+			return
+		}
+
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Not authenticated"})
 	}
 }
