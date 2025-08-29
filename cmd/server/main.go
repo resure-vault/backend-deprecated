@@ -53,7 +53,6 @@ func main() {
 		{
 			auth.POST("/signup", handlers.Signup(db))
 			auth.POST("/login", handlers.Login(db))
-			// allow clients to validate a token or API key and get basic user info
 			auth.GET("/me", handlers.Me(db))
 		}
 
