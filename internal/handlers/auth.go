@@ -577,11 +577,26 @@ func Login(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// verify password (supports bcrypt legacy and new Argon2id)
 		if !utils.CheckPasswordHash(req.Password, user.Password) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 			return
 		}
 
+		// if the stored hash was bcrypt, re-hash using Argon2id and update
+		// database (for migration, to be removed in the next major release)
+		if strings.HasPrefix(user.Password, "$2a$") || strings.HasPrefix(user.Password, "$2b$") || strings.HasPrefix(user.Password, "$2y$") {
+			newHash, err := utils.HashPassword(req.Password)
+			if err == nil {
+				if err := db.Model(&user).Update("password", newHash).Error; err != nil {
+					log.Printf("failed to update password hash for user %d: %v", user.ID, err)
+				}
+			} else {
+				log.Printf("failed to re-hash password for user %d: %v", user.ID, err)
+			}
+		}
+
+		// verify master password
 		if !utils.CheckPasswordHash(req.MasterPassword, user.MasterPasswordHash) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid master password"})
 			return
