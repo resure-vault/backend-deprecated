@@ -1,65 +1,67 @@
+version: '3.8'
+
 services:
-  secured-postgres:
+  resure-postgres:
     image: postgres:16.2-alpine
-    container_name: secured-postgres
+    container_name: resure-postgres
     restart: always
     ports:
       - "127.0.0.1:${PROD_DB_PORT:-5432}:5432"
     environment:
-      POSTGRES_USER: ${PROD_DB_USER:-secured}
+      POSTGRES_USER: ${PROD_DB_USER:-resure}
       POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:-notsecured}
       POSTGRES_DB: ${PROD_DB_NAME:-sm}
     volumes:
-      - secured-postgres:/var/lib/postgresql/secured/data
+      - resure-postgres:/var/lib/postgresql/resure/data
     networks:
-      - secured-network
+      - resure-network
 
-  secured-redis:
+  resure-redis:
     image: redis:7.2-alpine
-    container_name: secured-redis
+    container_name: resure-redis
     restart: always
     command: redis-server --requirepass ${REDIS_PASSWORD:-notsecured}
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - secured-redis:/secured/data
+      - resure-redis:/resure/data
     networks:
-      - secured-network
+      - resure-network
 
-  secured-app:
+  resure-app:
     build:
-      context: ..  # Build context is the parent directory (sm-backend)
-      dockerfile: docker/Dockerfile  # Path to Dockerfile relative to context
-    container_name: secured-app
+      context: ${APP_BUILD_CONTEXT:-..}  # default to parent directory
+      dockerfile: ${APP_DOCKERFILE:-docker/Dockerfile}  # path relative to context
+    container_name: resure-app
     restart: always
     ports:
       - "${PORT:-8080}:8080"
     environment:
-      PROD_DB_HOST: secured-postgres
+      PROD_DB_HOST: resure-postgres
       PROD_DB_PORT: 5432
       PROD_DB_NAME: ${PROD_DB_NAME:-sm}
-      PROD_DB_USER: ${PROD_DB_USER:-secured}
+      PROD_DB_USER: ${PROD_DB_USER:-resure}
       PROD_DB_PASSWORD: ${PROD_DB_PASSWORD:-notsecured}
       JWT_SECRET: ${JWT_SECRET:-your-very-secure-jwt-secret-change-this}
       PORT: ${PORT:-8080}
       GIN_MODE: ${GIN_MODE:-debug}
-      REDIS_URL: redis://secured-redis:6379
-      REDIS_HOST: secured-redis
+      REDIS_URL: ${REDIS_URL:-redis://resure-redis:6379}
+      REDIS_HOST: resure-redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-notsecured}
       REDIS_DB: ${REDIS_DB:-0}
     depends_on:
-      - secured-postgres
-      - secured-redis
+      - resure-postgres
+      - resure-redis
     networks:
-      - secured-network
+      - resure-network
 
 networks:
-  secured-network:
-    name: secured-network
+  resure-network:
+    name: resure-network
     driver: bridge
     external: false
 
 volumes:
-  secured-postgres:
-  secured-redis:
+  resure-postgres:
+  resure-redis:

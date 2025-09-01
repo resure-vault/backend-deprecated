@@ -1,17 +1,23 @@
-FROM golang:alpine AS builder
+# build stage
+FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
+COPY package.json package-lock.json* bun.lock* tsconfig.json ./
+COPY src ./src
+COPY migrations ./migrations
 
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o main cmd/server/main.go
+RUN npm ci --production=false
+RUN npm run build
 
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-WORKDIR /root/
-
-COPY --from=builder /app/main .
+# production stage
+FROM node:20-alpine
+RUN apk add --no-cache ca-certificates
+WORKDIR /app
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/migrations ./migrations
 
 EXPOSE 8080
-CMD ["./main"]
+ENV NODE_ENV=production
+CMD ["node", "./dist/index.js"]

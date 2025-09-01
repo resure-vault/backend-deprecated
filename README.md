@@ -1,55 +1,20 @@
-# sm-backend
+# SM Vault - Backend (TypeScript)
 
-Backend service for storing and serving secrets (Gin + GORM + Redis).
+This repository contains a TypeScript (Express + Bun) rewrite of the original Go backend for SM Vault. It aims to preserve API shapes, email templates, and encryption behavior.
 
-## Prerequisites
+## Quick start
 
-- Go 1.24+
-- PostgreSQL database
-- Redis
-
-## Environment
-
-Copy the example env and fill values:
-
-```bash
-cp .env.example .env
-# Edit .env and set your DB and JWT_SECRET values
-```
-
-## Build & Run
-
-From the project root:
-
-1. Download dependencies:
-
-```bash
-go mod download
-```
-
-2. Build the binary:
-
-```bash
-go build -o bin/server ./cmd/server
-```
-
-3. Run the server:
-
-```bash
-./bin/server
-```
-
-Alternatively run without building:
-
-```bash
-go run ./cmd/server/main.go
-```
+1. Copy `.env.example` to `.env` and fill required values (DATABASE_URL, DB_SCHEMA, JWT_SECRET, RESEND_API_KEY, RESEND_AUDIENCE_ID, REDIS_URL as needed).
+2. Install dependencies: `bun install`
+3. Run migrations: `bun run migrate:run`
+4. Start dev server: `bun run dev`
 
 ## Development
 
-- To enable Gin debug mode set `GIN_MODE=debug` in your environment (or `.env`).
-- Health check: `GET /health` (cached for 30s).
-- API base: `/api/v1`
-  - Auth: `/api/v1/auth/signup`, `/api/v1/auth/login`
-  - Protected (JWT): `/api/v1/secrets`, `/api/v1/apikeys` (see routes in `cmd/server/main.go`)
-  - API key protected: `GET /api/v1/secrets` (for API-key clients)
+- Type checking: `bun run check`
+- Build: `bun run build`
+- Run migrations: `bun run migrate:run`
+
+## Contributing
+
+See `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` for guidelines.
