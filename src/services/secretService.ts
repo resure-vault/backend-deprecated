@@ -24,6 +24,13 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// secret service
+// helper functions to list, create and retrieve secrets from the database
+// responsibilities:
+// - store encrypted secret blobs using src/utils/crypto.Encrypt
+// - decrypt secrets for authorized callers using Decrypt
+// - note: errors from Decrypt bubble up so caller can decide how to handle them
+
 import AppDataSource from '../data-source'
 import { Secret } from '../entities/Entities'
 import { Encrypt, Decrypt } from '../utils/crypto'

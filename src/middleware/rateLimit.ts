@@ -24,6 +24,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// rate limiter middleware
+// simple in-memory rate limiter used for development
+// production: replace with redis-backed store for distributed rate limiting
+
 import { Request, Response, NextFunction } from 'express'
 
 const BUCKETS: Map<string, { tokens: number; last: number }> = new Map()

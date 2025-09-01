@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// auth routes
+// mounts signup, login, me, forgot-password and reset-password handlers
+// these routes wire requests to src/controllers/auth.ts
+// keep routes minimal; validation lives in controllers
+
 import express from 'express'
 import { AuthController } from '../controllers/auth'
 import { validateAPIKeyMiddleware } from '../middleware/auth'

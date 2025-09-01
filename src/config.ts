@@ -24,6 +24,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// config
+// central place to load environment variables and validate required secrets
+// important: in production require JWT_SECRET, HMAC_PEPPER, DATABASE_URL and REDIS_URL
+
 import dotenv from 'dotenv'
 import path from 'path'
 
@@ -57,7 +61,7 @@ export const config = {
   RESEND_AUDIENCE_ID: process.env.RESEND_AUDIENCE_ID || ''
 }
 
-// Startup validation: in production, ensure critical secrets are not default placeholders
+// validation: in production, ensure critical secrets are not default placeholders
 if ((process.env.NODE_ENV === 'production') && (config.JWT_SECRET === 'change-me' || config.HMAC_PEPPER === 'pepper')) {
   throw new Error('Critical secrets JWT_SECRET and HMAC_PEPPER must be set in production')
 }

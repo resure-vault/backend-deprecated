@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// data source
+// typeorm datasource configuration and migration bootstrap
+// important: migrations may run via ts-node/esm in dev; provide compiled bootstrap for CI
+// note: schema configured from env (DB_SCHEMA)
+
 // dynamically import entities and config so ts-node/esm can resolve .ts modules when TypeORM CLI runs
 const entitiesModule = await import('./entities/Entities.ts')
 const configModule = await import('./config.ts')

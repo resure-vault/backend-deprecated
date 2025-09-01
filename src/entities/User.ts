@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// user entity
+// represents an account: name, email, password (argon2 phc), masterPasswordHash
+// fields: id, name, email, password, masterPasswordHash, createdAt, updatedAt
+// security note: do not log password fields; treat master password like a secret
+
 import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm'
 import { Secret } from './Secret'
 import { APIKey } from './APIKey'

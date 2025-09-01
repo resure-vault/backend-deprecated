@@ -24,6 +24,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// apikeys routes
+// routes for managing api keys: list, create, revoke
+// mounted under authenticated routes and return masked keys where appropriate
+
 import express from 'express'
 import { APIKeysController } from '../controllers/apikeys'
 

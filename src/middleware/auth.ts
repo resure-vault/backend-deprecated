@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// auth middleware
+// checks bearer jwt or api key and attaches user to request as req.user
+// used by routes that require authentication
+// security note: keep auth checks lightweight and fail closed
+
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 import { config } from '../config'

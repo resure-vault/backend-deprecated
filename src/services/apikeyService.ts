@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// apikey service
+// create and validate api keys; store hmac in db and return raw key at creation
+// caches user mapping in redis when available
+// remember: rotate HMAC_PEPPER carefully to avoid invalidating keys recklessly
+
 import AppDataSource from '../data-source'
 import { APIKey, User } from '../entities/Entities'
 import { hashAPIKey, generateRawAPIKey } from '../utils/crypto'

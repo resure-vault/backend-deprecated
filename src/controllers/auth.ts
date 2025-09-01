@@ -24,6 +24,14 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// auth controller
+// handles user signup, login, me, forgot/reset password endpoints
+// notes:
+// - issues jwt tokens using config.JWT_SECRET
+// - mirrors go backend behavior: creates temporary pw + master pw on signup
+// - email sending is non-blocking where possible
+// - password and master password handling happens via src/utils/crypto.ts
+
 import { Request, Response } from 'express'
 import jwt from 'jsonwebtoken'
 import { config } from '../config'

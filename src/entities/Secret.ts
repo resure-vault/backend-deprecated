@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// secret entity
+// stores encrypted secret blobs for a user
+// fields: id, userId, name, value (encrypted), createdAt, updatedAt
+// remember: value holds ciphertext in v1$<salt>$<nonce>$<ct> format
+
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm'
 import { User } from './User'
 

@@ -24,6 +24,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// reset token service
+// stores reset tokens in redis with a ttl and provides a memory fallback for dev
+// tokens are temporary and single-use; production should not use the in-memory fallback
+
 import { createClient, RedisClientType } from 'redis'
 import { config } from '../config'
 import { randomUUID } from 'crypto'

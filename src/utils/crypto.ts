@@ -24,6 +24,16 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// this file contains crypto helpers used across the server.
+// all comments added by the assistant are lowercase as requested.
+// responsibilities:
+// - password hashing and verification
+// - api key generation and hmac hashing
+// - per-secret encryption and decryption using argon2id + xchacha20-poly1305
+// notes:
+// - ciphertext format is: v1$<salt_b64>$<nonce_b64>$<ct_b64>
+// - argon2 parameters are chosen for moderate hardness; tune in production
+
 import crypto from 'crypto'
 import argon2 from 'argon2'
 import { XChaCha20Poly1305 } from '@stablelib/xchacha20poly1305'
@@ -34,29 +44,51 @@ const ARGON_KEYLEN = 32
 const SALT_LEN = 16
 const NONCE_LEN = 24 // XChaCha20-Poly1305 nonce size
 
+// hashPassword
+// - wrapper around argon2.hash
+// - returns a phc encoded argon2 string suitable for storage in users.password
+// - keep this async so callers can await and surface errors cleanly
 export async function hashPassword(password: string) {
   return await argon2.hash(password)
 }
 
+// verifyPassword
+// - verify a plain password against a stored argon2 hash
+// - returns true on match, false on any error or mismatch
 export async function verifyPassword(hash: string, password: string) {
   try {
     return await argon2.verify(hash, password)
   } catch (err) {
+    // verification failure or malformed hash -> treat as non-match
     return false
   }
 }
 
+// hashAPIKey
+// - deterministic hmac-sha256 over a raw api key using a pepper value
+// - the pepper must be secret and rotated carefully
+// - stored value is hex digest
 export function hashAPIKey(raw: string, pepper: string) {
   const hmac = crypto.createHmac('sha256', pepper)
   hmac.update(raw)
   return hmac.digest('hex')
 }
 
+// generateRawAPIKey
+// - produce a human safe-ish prefix then 32 random bytes hex
+// - callers should show the raw key once and persist only the hmac in db
 export function generateRawAPIKey() {
   return 'svp_' + crypto.randomBytes(32).toString('hex')
 }
 
-// Encrypt produces Go-compatible format: v1$<salt_b64>$<nonce_b64>$<ct_b64>
+// encrypt
+// - produces ciphertext in versioned format the go backend expects: v1$salt$nonce$ciphertext
+// - workflow:
+//   1) generate random salt
+//   2) derive a 32 byte key using argon2id with the salt
+//   3) encrypt with xchacha20-poly1305 using a random 24 byte nonce
+//   4) return base64 parts joined with dollar separators
+// - note: callers must provide the password (master password) used to derive the key
 export async function Encrypt(plaintext: string, password: string) {
   if (!password) throw new Error('password required')
   const salt = crypto.randomBytes(SALT_LEN)
@@ -84,6 +116,10 @@ export async function Encrypt(plaintext: string, password: string) {
   return `v1$${bSalt}$${bNonce}$${bCT}`
 }
 
+// decrypt
+// - accepts ciphertext in the v1 format and the password used to derive the key
+// - derives key with the same argon2 parameters and attempts open()
+// - throws on malformed input or failed authentication
 export async function Decrypt(ciphertextStr: string, password: string) {
   if (!password || !ciphertextStr) throw new Error('password and ciphertext required')
   if (!ciphertextStr.startsWith('v1$')) {
@@ -104,7 +140,7 @@ export async function Decrypt(ciphertextStr: string, password: string) {
     parallelism: threads,
     hashLength: ARGON_KEYLEN,
     raw: true,
-  } as any)) as Buffer // reminds me of my friend bufferwise :P
+  } as any)) as Buffer // reminds me of my friend bufferwise :3
 
   const aead = new XChaCha20Poly1305(key)
   const plaintext = aead.open(nonce, ct)

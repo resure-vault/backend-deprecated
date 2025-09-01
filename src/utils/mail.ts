@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// mail utilities
+// helpers for rendering email templates and sending via resend
+// functions: sendPasswordEmail, sendLoginNotificationEmail, sendWelcomeEmail, sendPasswordResetEmail, addToResendAudience
+// notes: templates live in /templates; html is escaped to avoid injection
+
 import { Resend } from 'resend'
 import { config } from '../config'
 import fs from 'fs'

@@ -24,6 +24,10 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// secrets routes
+// exposes endpoints for list, create, get, update, delete secret operations
+// routes expect an authenticated user (see src/middleware/auth.ts)
+
 import express from 'express'
 import { SecretsController } from '../controllers/secrets'
 

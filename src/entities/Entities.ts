@@ -24,6 +24,12 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// entities index
+// consolidated typeorm entities used by the app
+// includes: User, Secret, APIKey (see individual files for field details)
+// these classes map directly to db tables and are used by repositories
+// small note: treat these as the single source of truth for schema in the app
+
 import {
   Entity,
   PrimaryGeneratedColumn,

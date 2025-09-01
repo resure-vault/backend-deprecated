@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// app bootstrap
+// sets up express, connects to the database, mounts routes and health endpoint
+// health endpoint reports db and redis connectivity; restrict access in prod
+// health checks are like vitals, don't poke the iv :P
+
 import 'reflect-metadata'
 import express from 'express'
 import helmet from 'helmet'

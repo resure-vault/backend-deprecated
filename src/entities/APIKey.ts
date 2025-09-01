@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// apikey entity
+// represents an api key record belonging to a user
+// fields: id, userId, name, key (hmac), isActive, createdAt
+// note: raw key material is only returned at creation and not persisted in plain text
+
 import { Entity, PrimaryGeneratedColumn, Column, ManyToOne } from 'typeorm'
 import { User } from './User'
 

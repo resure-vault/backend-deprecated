@@ -24,6 +24,11 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// user service
+// helper functions to create and query users
+// handles hashing passwords and master passwords via src/utils/crypto.ts
+// ensure timestamps are set when creating records to avoid nulls in the db
+
 import AppDataSource from '../data-source'
 import { User } from '../entities/Entities'
 import { hashPassword, verifyPassword } from '../utils/crypto'

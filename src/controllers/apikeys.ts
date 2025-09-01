@@ -24,6 +24,13 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// apikeys controller
+// list, create and revoke api keys for the authenticated user
+// notes:
+// - returned api_key objects hide the raw key material on list endpoints
+// - create returns the raw key once; store it securely
+// - revocation flips isActive and persists
+
 import { Request, Response } from 'express'
 import AppDataSource from '../data-source'
 import { APIKey, User } from '../entities/Entities'

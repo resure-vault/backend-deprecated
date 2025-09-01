@@ -24,6 +24,13 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+// secrets controller
+// handles creating, listing, fetching, updating and deleting secrets for a user
+// notes:
+// - secrets are stored encrypted at rest; see src/services/secretService.ts
+// - endpoints should validate master password before returning raw secret
+// - this file currently returns placeholders; implement storage calls here when ready
+
 import { Request, Response } from 'express'
 
 export class SecretsController {
