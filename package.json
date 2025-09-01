@@ -1,7 +1,7 @@
 {
   "name": "sm-vault-backend-ts",
-  "version": "0.1.0",
-  "description": "TypeScript Express + Bun rewrite of sm-backend",
+  "version": "0.1.2",
+  "description": "core backend for everything we make at resure™.",
   "private": true,
   "type": "module",
   "scripts": {
@@ -18,7 +18,7 @@
     "type": "git",
     "url": "https://github.com/sm-vault/sm-backend"
   },
-  "author": "sm-vault <maintainer@example.com>",
+  "author": "resure-contributors",
   "license": "MIT",
   "dependencies": {
     "@stablelib/xchacha20poly1305": "^2.0.1",
