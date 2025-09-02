@@ -25,71 +25,57 @@
  */
 
 // reset token service
-// stores reset tokens in redis with a ttl and provides a memory fallback for dev
-// tokens are temporary and single-use; production should not use the in-memory fallback
+// this module stores reset tokens in redis with a ttl. the previous in-memory fallback
+// was removed so that tokens are reliably shared across instances.
+// note: initRedis will throw if REDIS_URL is not configured. configure your env.
 
 import { createClient, RedisClientType } from 'redis'
 import { config } from '../config'
 import { randomUUID } from 'crypto'
 
 let redisClient: RedisClientType | null = null
-let usingRedis = false
+const TTL_SECONDS = 60 * 60 // 1 hour
 
 async function initRedis() {
-  if (!config.REDIS_URL) return
   if (redisClient) return
+  if (!config.REDIS_URL || config.REDIS_URL.trim() === '') {
+    throw new Error('REDIS_URL is required for reset token storage. set REDIS_URL in your environment')
+  }
   redisClient = createClient({ url: config.REDIS_URL })
   try {
     await redisClient.connect()
     console.log('resetTokenService: connected to redis')
-    usingRedis = true
   } catch (err) {
-    console.warn('resetTokenService: failed to connect to redis, falling back to in-memory store', err)
     redisClient = null
-    usingRedis = false
+    console.error('resetTokenService: failed to connect to redis', err)
+    throw err
   }
 }
-
-const IN_MEMORY: Map<string, { userId: number; expiresAt: number }> = new Map()
-const TTL_SECONDS = 60 * 60 // 1 hour
 
 export async function createResetToken(userId: number) {
   await initRedis()
   const token = randomUUID()
-  const expiresAt = Date.now() + TTL_SECONDS * 1000
-  if (usingRedis && redisClient) {
-    await redisClient.set(`reset:${token}`, String(userId), { EX: TTL_SECONDS })
-  } else {
-    IN_MEMORY.set(token, { userId, expiresAt })
-  }
+  // store userId under key with an expiry
+  await redisClient!.set(`reset:${token}`, String(userId), { EX: TTL_SECONDS })
   return token
 }
 
 export async function getResetToken(token: string) {
   await initRedis()
-  if (usingRedis && redisClient) {
-    const v = await redisClient.get(`reset:${token}`)
-    if (!v) return null
-    return { userId: parseInt(v, 10), expiresAt: Date.now() + TTL_SECONDS * 1000 }
-  }
-  const rec = IN_MEMORY.get(token)
-  if (!rec) return null
-  if (rec.expiresAt < Date.now()) {
-    IN_MEMORY.delete(token)
-    return null
-  }
-  return rec
+  const key = `reset:${token}`
+  const v = await redisClient!.get(key)
+  if (!v) return null
+  // compute expiresAt from remaining ttl (pttl returns ms)
+  const pttl = await redisClient!.pTTL(key)
+  const expiresAt = Date.now() + (pttl > 0 ? pttl : 0)
+  return { userId: parseInt(v, 10), expiresAt }
 }
 
 export async function deleteResetToken(token: string) {
   await initRedis()
-  if (usingRedis && redisClient) {
-    await redisClient.del(`reset:${token}`)
-  } else {
-    IN_MEMORY.delete(token)
-  }
+  await redisClient!.del(`reset:${token}`)
 }
 
 export function isUsingRedis() {
-  return usingRedis
+  return redisClient !== null
 }
