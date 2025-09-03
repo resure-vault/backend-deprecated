@@ -1,20 +1,15 @@
-# SM Vault - Backend (TypeScript)
+# sm-backend
 
-This repository contains a TypeScript (Express + Bun) rewrite of the original Go backend for SM Vault. It aims to preserve API shapes, email templates, and encryption behavior.
+To install dependencies:
 
-## Quick start
+```bash
+bun install
+```
 
-1. Copy `.env.example` to `.env` and fill required values (DATABASE_URL, DB_SCHEMA, JWT_SECRET, RESEND_API_KEY, RESEND_AUDIENCE_ID, REDIS_URL as needed).
-2. Install dependencies: `bun install`
-3. Run migrations: `bun run migrate:run`
-4. Start dev server: `bun run dev`
+To run:
 
-## Development
+```bash
+bun run index.ts
+```
 
-- Type checking: `bun run check`
-- Build: `bun run build`
-- Run migrations: `bun run migrate:run`
-
-## Contributing
-
-See `CONTRIBUTING.md` and `CODE_OF_CONDUCT.md` for guidelines.
+This project was created using `bun init` in bun v1.2.20. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

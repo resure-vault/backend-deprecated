@@ -1,94 +1,76 @@
-# /*
-#  * resure — the best way to store your secrets instead of forgetting them.
-#  *
-#  * Copyright (c) 2025-present
-#  * Shubham Yadav (bas3line), Nandha (almightynan)
-#  * License: MIT
-#  *
-#  * Permission is hereby granted, free of charge, to any person obtaining a
-#  * copy of this software and associated documentation files (the "Software"),
-#  * to deal in the Software without restriction, including without limitation
-#  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
-#  * and/or sell copies of the Software, and to permit persons to whom the
-#  * Software is furnished to do so, subject to the following conditions:
-#  *
-#  * The above copyright notice and this permission notice shall be included in
-#  * all copies or substantial portions of the Software.
-#  *
-#  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-#  * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-#  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-#  * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-#  * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-#  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-#  * DEALINGS IN THE SOFTWARE.
-#  */
-
-version: '3.8'
-
 services:
-  resure-postgres:
-    image: postgres:16.2-alpine
-    container_name: resure-postgres
-    restart: always
-    ports:
-      - "127.0.0.1:${PROD_DB_PORT:-5432}:5432"
-    environment:
-      POSTGRES_USER: ${PROD_DB_USER:-resure}
-      POSTGRES_PASSWORD: ${PROD_DB_PASSWORD:-notsecured}
-      POSTGRES_DB: ${PROD_DB_NAME:-sm}
-    volumes:
-      - resure-postgres:/var/lib/postgresql/resure/data
-    networks:
-      - resure-network
-
-  resure-redis:
-    image: redis:7.2-alpine
-    container_name: resure-redis
-    restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD:-notsecured}
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - resure-redis:/resure/data
-    networks:
-      - resure-network
-
-  resure-app:
+  api:
     build:
-      context: ${APP_BUILD_CONTEXT:-..}  # default to parent directory
-      dockerfile: ${APP_DOCKERFILE:-docker/Dockerfile}  # path relative to context
-    container_name: resure-app
-    restart: always
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: secured-bun-api
+    restart: unless-stopped
     ports:
-      - "${PORT:-8080}:8080"
+      - "8080:8080"
     environment:
-      PROD_DB_HOST: resure-postgres
-      PROD_DB_PORT: 5432
-      PROD_DB_NAME: ${PROD_DB_NAME:-sm}
-      PROD_DB_USER: ${PROD_DB_USER:-resure}
-      PROD_DB_PASSWORD: ${PROD_DB_PASSWORD:-notsecured}
-      JWT_SECRET: ${JWT_SECRET:-your-very-secure-jwt-secret-change-this}
-      PORT: ${PORT:-8080}
-      REDIS_URL: ${REDIS_URL:-redis://resure-redis:6379}
-      REDIS_HOST: resure-redis
-      REDIS_PORT: 6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-notsecured}
-      REDIS_DB: ${REDIS_DB:-0}
-      RESEND_API_KEY: ${RESEND_API_KEY:-your-resend-api-key}
-      RESEND_AUDIENCE_ID: ${RESEND_AUDIENCE_ID:-your-resend-audience-id}
+      - NODE_ENV=production
+      - PORT=8080
+      - PROD_DB_HOST=postgres
+      - PROD_DB_PORT=5432
+      - PROD_DB_NAME=sm
+      - PROD_DB_USER=secured
+      - PROD_DB_PASSWORD=notsecured
+      - JWT_SECRET=your-very-secure-jwt-secret-change-this
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=notsecured
+      - REDIS_DB=0
     depends_on:
-      - resure-postgres
-      - resure-redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
-      - resure-network
+      - secured-network
 
-networks:
-  resure-network:
-    name: resure-network
-    driver: bridge
-    external: false
+  postgres:
+    image: postgres:15-alpine
+    container_name: secured-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sm
+      POSTGRES_USER: secured
+      POSTGRES_PASSWORD: notsecured
+      POSTGRES_TIMEZONE: UTC
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U secured -d sm"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - secured-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: secured-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "notsecured"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - secured-network
 
 volumes:
-  resure-postgres:
-  resure-redis:
+  postgres_data:
+  redis_data:
+
+networks:
+  secured-network:
+    driver: bridge

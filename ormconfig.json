@@ -1,7 +1,0 @@
-{
-  "type": "postgres",
-  "url": "${DATABASE_URL}",
-  "synchronize": false,
-  "logging": false,
-  "entities": ["dist/entities/**/*.js", "src/entities/**/*.ts"]
-}
