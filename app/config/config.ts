@@ -1,5 +1,5 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import { config as dotenvConfig } from '@dotenvx/dotenvx';
+dotenvConfig();
 
 export const config = {
   port: process.env.PORT,
@@ -24,4 +24,9 @@ export const config = {
   jwt: {
     secret: process.env.JWT_SECRET,
   },
+  
+  resend: {
+    apiKey: process.env.RESEND_API_KEY,
+    audienceId: process.env.RESEND_AUDIENCE_ID,
+  }
 };
