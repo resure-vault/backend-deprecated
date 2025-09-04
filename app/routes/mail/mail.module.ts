@@ -6,7 +6,7 @@ export class MailModule {
   private mailService: MailService;
 
   constructor() {
-    this.mailService = new MailService();
+    this.mailService = MailService.getInstance();
   }
 
   getService(): MailService {

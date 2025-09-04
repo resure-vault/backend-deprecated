@@ -1,6 +1,5 @@
 node_modules/
 /cli 
-.env
 dist/
 .bun/
 bun.lock
@@ -23,3 +22,4 @@ build/
 .env.test.local
 .env.production.local
 .env.keys
+.env

@@ -144,30 +144,6 @@ router.post('/logout', authMiddleware, async (req, res) => {
   }
 });
 
-router.post('/verify-email', async (req, res) => {
-  try {
-    const { token } = req.body || {};
-
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: 'Verification token is required'
-      });
-    }
-
-    const result = await userService.verifyEmail(token);
-    const statusCode = result.success ? 200 : 400;
-
-    res.status(statusCode).json(result);
-  } catch (error: any) {
-    logger.error('Email verification error', error, { ip: req.ip });
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-});
-
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body || {};

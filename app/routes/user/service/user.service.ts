@@ -5,10 +5,12 @@ import crypto from 'crypto';
 import { logger } from '../../../common/logger';
 import { MailService } from '../../mail/service/mail.service';
 import * as authSchema from '../../../microservices/schema/schema';
-import type { 
-  CreateUserRequest, 
-  LoginRequest, 
-  UserResponse, 
+import { eq } from 'drizzle-orm';
+import { getErrorMessage } from '../../../utils/error';
+import type {
+  CreateUserRequest,
+  LoginRequest,
+  UserResponse,
   AuthResponse,
   UpdateProfileRequest,
   ChangePasswordRequest,
@@ -38,7 +40,7 @@ export class UserService {
 
   constructor(db: any) {
     this.db = db;
-    this.mailService = new MailService();
+    this.mailService = MailService.getInstance();
     
     this.auth = betterAuth({
       database: drizzleAdapter(db, {
@@ -53,31 +55,12 @@ export class UserService {
       emailAndPassword: {
         enabled: true,
         requireEmailVerification: false,
-        sendResetPassword: async ({ user, url }: { user: any; url: string }): Promise<void> => {
-          await this.sendPasswordResetEmail(user.email, url);
-        },
-      },
-      user: {
-        additionalFields: {
-          name: {
-            type: "string",
-            required: false,
-          },
-          masterPassword: {
-            type: "string",
-            required: false,
-          },
-        },
       },
       session: {
         cookieCache: {
           enabled: true,
-          maxAge: 60 * 60 * 24 * 7,
+          maxAge: 604800,
         },
-      },
-      logger: {
-        level: "debug",
-        disabled: false,
       },
       callbacks: {
         after: [
@@ -104,360 +87,326 @@ export class UserService {
 
   async signup(data: CreateUserRequest): Promise<AuthResponse> {
     try {
-      logger.info('User signup attempt initiated', { email: data.email });
-
+      logger.info('User signup attempt', { email: data.email });
+      
+      // Generate secure passwords
       const passwords = this.generatePasswords();
       const name = this.extractNameFromEmail(data.email);
-
-      logger.debug('Attempting better-auth signup', {
+      
+      // Hash passwords
+      const hashedLoginPassword = await this.hashPassword(passwords.loginPassword);
+      const hashedMasterPassword = await this.hashPassword(passwords.masterPassword);
+      
+      // Direct database insertion
+      const [user] = await this.db.insert(authSchema.users).values({
         email: data.email,
-        hasPassword: !!passwords.loginPassword,
-        hasMasterPassword: !!passwords.masterPassword,
-        name
-      });
+        name: name,
+        password: hashedLoginPassword,
+        masterPassword: hashedMasterPassword,
+        emailVerified: false,
+        emailVerificationToken: null,
+        resetPasswordToken: null,
+        resetPasswordExpires: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }).returning();
 
-      const result = await this.auth.api.signUpEmail({
-        body: {
-          email: data.email,
-          password: passwords.loginPassword,
-          name: name,
-        },
-      });
+      // Send welcome email with resure branding
+      await this.mailService.sendAccountCreationEmail(
+        user.email, 
+        user.name, 
+        passwords.loginPassword,
+        passwords.masterPassword
+      );
 
-      if (result.error) {
-        logger.error('Better-auth signup failed', new Error(JSON.stringify(result.error)), {
-          email: data.email,
-          error: result.error,
-          errorCode: result.error.code,
-          errorType: result.error.type,
-          errorMessage: result.error.message,
-          errorStack: result.error.stack || 'No stack trace',
-          fullError: JSON.stringify(result.error, null, 2)
-        });
-        return {
-          success: false,
-          message: result.error.message || 'Account creation failed',
-          error: result.error.message || 'Failed to create user',
-        };
-      }
-
-      if (result.data?.user) {
-        try {
-          const hashedMasterPassword = await this.hashPassword(passwords.masterPassword);
-          await this.db.update(authSchema.users)
-            .set({ masterPassword: hashedMasterPassword })
-            .where(eq(authSchema.users.id, result.data.user.id));
-        } catch (updateError: any) {
-          logger.error('Failed to update master password', updateError, {
-            userId: result.data.user.id,
-            email: data.email
-          });
-        }
-      }
-
-      await this.handleUserRegistration(result.data.user, passwords);
-
-      logger.info('User signup completed successfully', { 
-        email: data.email,
-        userId: result.data.user.id 
-      });
+      logger.info('User signup completed', { email: data.email, userId: user.id });
 
       return {
         success: true,
-        message: 'Account created successfully. Please verify your email to continue.',
-        user: this.transformUserData(result.data.user),
+        message: 'Account created successfully.',
+        user: this.transformUserData(user),
         loginPassword: passwords.loginPassword,
         masterPassword: passwords.masterPassword,
       };
-    } catch (error: any) {
-      logger.error('User signup error', error, {
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('User signup error', new Error(message), { 
         email: data.email,
-        errorMessage: error.message,
-        errorStack: error.stack,
-        errorName: error.name,
-        fullError: JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+        errorMessage: message
       });
       return {
         success: false,
         message: 'Account creation failed',
-        error: error.message,
+        error: message,
       };
     }
   }
 
   async login(data: LoginRequest): Promise<AuthResponse> {
     try {
-      logger.info('User login attempt initiated', { email: data.email });
-
-      const result = await this.auth.api.signInEmail({
-        body: {
-          email: data.email,
-          password: data.password,
-        },
+      logger.info('User login attempt', { email: data.email });
+      const result = await this.auth.api.signInEmail({ 
+        body: { 
+          email: data.email, 
+          password: data.password 
+        } 
       });
-
+      
       if (result.error) {
-        logger.error('User login failed', new Error(result.error.message), { email: data.email });
-        return {
-          success: false,
-          message: result.error.message,
-          error: result.error.message,
+        logger.error('Login failed', new Error(result.error.message), { email: data.email });
+        return { 
+          success: false, 
+          message: result.error.message, 
+          error: result.error.message 
         };
       }
-
-      logger.info('User login completed successfully', { 
-        email: data.email,
-        userId: result.data.user.id 
-      });
-
-      return {
-        success: true,
-        message: 'Authentication successful',
-        user: this.transformUserData(result.data.user),
-        token: result.data.session.token,
+      
+      logger.info('Login successful', { email: data.email, userId: result.data.user.id });
+      return { 
+        success: true, 
+        message: 'Authentication successful', 
+        user: this.transformUserData(result.data.user), 
+        token: result.data.session.token 
       };
-    } catch (error: any) {
-      logger.error('User login error', error, { email: data.email });
-      return {
-        success: false,
-        message: 'Authentication failed',
-        error: error.message,
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Login error', new Error(message), { email: data.email });
+      return { 
+        success: false, 
+        message: 'Authentication failed', 
+        error: message 
       };
     }
   }
 
   async logout(sessionToken: string): Promise<{ success: boolean; message: string }> {
     try {
-      await this.auth.api.signOut({
-        headers: {
-          authorization: `Bearer ${sessionToken}`,
-        },
+      await this.auth.api.signOut({ 
+        headers: { 
+          authorization: `Bearer ${sessionToken}` 
+        } 
       });
-
-      logger.info('User logout completed', { sessionToken });
-
-      return {
-        success: true,
-        message: 'Session terminated successfully',
+      
+      logger.info('Logout completed', { sessionToken });
+      return { 
+        success: true, 
+        message: 'Session terminated successfully' 
       };
-    } catch (error: any) {
-      logger.error('User logout error', error, { sessionToken });
-      return {
-        success: false,
-        message: 'Session termination failed',
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Logout error', new Error(message), { sessionToken });
+      return { 
+        success: false, 
+        message: 'Session termination failed' 
       };
     }
   }
 
   async verifyEmail(token: string): Promise<AuthResponse> {
     try {
-      const result = await this.auth.api.verifyEmail({
-        body: { token },
-      });
-
+      const result = await this.auth.api.verifyEmail({ body: { token } });
+      
       if (result.error) {
         logger.error('Email verification failed', new Error(result.error.message), { token });
-        return {
-          success: false,
-          message: result.error.message,
-          error: result.error.message,
+        return { 
+          success: false, 
+          message: result.error.message, 
+          error: result.error.message 
         };
       }
-
-      logger.info('Email verification completed', { userId: result.data.user.id });
-
-      return {
-        success: true,
-        message: 'Email verification successful',
-        user: this.transformUserData(result.data.user),
+      
+      logger.info('Email verified', { userId: result.data.user.id });
+      return { 
+        success: true, 
+        message: 'Email verification successful', 
+        user: this.transformUserData(result.data.user) 
       };
-    } catch (error: any) {
-      logger.error('Email verification error', error, { token });
-      return {
-        success: false,
-        message: 'Email verification failed',
-        error: error.message,
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Email verification error', new Error(message), { token });
+      return { 
+        success: false, 
+        message: 'Email verification failed', 
+        error: message 
       };
     }
   }
 
   async requestPasswordReset(email: string): Promise<{ success: boolean; message: string }> {
     try {
-      logger.info('Password reset requested', { email });
-
-      const result = await this.auth.api.forgetPassword({
-        body: { email },
-      });
-
+      const result = await this.auth.api.forgetPassword({ body: { email } });
+      
       if (result.error) {
         logger.error('Password reset request failed', new Error(result.error.message), { email });
-        return {
-          success: false,
-          message: result.error.message,
+        return { 
+          success: false, 
+          message: result.error.message 
         };
       }
-
-      logger.info('Password reset email dispatched', { email });
-
-      return {
-        success: true,
-        message: 'Password reset instructions sent',
+      
+      logger.info('Password reset requested', { email });
+      return { 
+        success: true, 
+        message: 'Password reset instructions sent' 
       };
-    } catch (error: any) {
-      logger.error('Password reset request error', error, { email });
-      return {
-        success: false,
-        message: 'Password reset request failed',
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Password reset request error', new Error(message), { email });
+      return { 
+        success: false, 
+        message: 'Password reset request failed' 
       };
     }
   }
 
   async resetPassword(token: string, password: string): Promise<AuthResponse> {
     try {
-      const result = await this.auth.api.resetPassword({
-        body: { token, password },
+      const result = await this.auth.api.resetPassword({ 
+        body: { 
+          token, 
+          password 
+        } 
       });
-
+      
       if (result.error) {
         logger.error('Password reset failed', new Error(result.error.message), { token });
-        return {
-          success: false,
-          message: result.error.message,
-          error: result.error.message,
+        return { 
+          success: false, 
+          message: result.error.message, 
+          error: result.error.message 
         };
       }
-
+      
       logger.info('Password reset completed', { userId: result.data.user.id });
-
-      return {
-        success: true,
-        message: 'Password updated successfully',
-        user: this.transformUserData(result.data.user),
+      return { 
+        success: true, 
+        message: 'Password updated successfully', 
+        user: this.transformUserData(result.data.user) 
       };
-    } catch (error: any) {
-      logger.error('Password reset error', error, { token });
-      return {
-        success: false,
-        message: 'Password reset failed',
-        error: error.message,
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Password reset error', new Error(message), { token });
+      return { 
+        success: false, 
+        message: 'Password reset failed', 
+        error: message 
       };
     }
   }
 
   async updateProfile(userId: string, data: UpdateProfileRequest): Promise<AuthResponse> {
     try {
-      logger.info('Profile update initiated', { userId });
-
-      const result = await this.auth.api.updateUser({
-        body: {
-          id: userId,
-          ...data,
-        },
+      const result = await this.auth.api.updateUser({ 
+        body: { 
+          id: userId, 
+          ...data 
+        } 
       });
-
+      
       if (result.error) {
         logger.error('Profile update failed', new Error(result.error.message), { userId });
-        return {
-          success: false,
-          message: result.error.message,
-          error: result.error.message,
+        return { 
+          success: false, 
+          message: result.error.message, 
+          error: result.error.message 
         };
       }
-
-      logger.info('Profile updated successfully', { userId });
-
-      return {
-        success: true,
-        message: 'Profile updated successfully',
-        user: this.transformUserData(result.data),
+      
+      logger.info('Profile updated', { userId });
+      return { 
+        success: true, 
+        message: 'Profile updated successfully', 
+        user: this.transformUserData(result.data) 
       };
-    } catch (error: any) {
-      logger.error('Profile update error', error, { userId });
-      return {
-        success: false,
-        message: 'Profile update failed',
-        error: error.message,
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Profile update error', new Error(message), { userId });
+      return { 
+        success: false, 
+        message: 'Profile update failed', 
+        error: message 
       };
     }
   }
 
   async changePassword(userId: string, data: ChangePasswordRequest): Promise<{ success: boolean; message: string }> {
     try {
-      logger.info('Password change initiated', { userId });
-
       const user = await this.auth.api.getUser({ userId });
+      
       if (!user || !await this.verifyPassword(data.currentPassword, user.password)) {
-        return {
-          success: false,
-          message: 'Current password verification failed',
+        return { 
+          success: false, 
+          message: 'Current password verification failed' 
         };
       }
-
-      const hashedPassword = await this.hashPassword(data.newPassword);
-      await this.auth.api.updateUser({
-        body: {
-          id: userId,
-          password: hashedPassword,
-        },
+      
+      const hashed = await this.hashPassword(data.newPassword);
+      await this.auth.api.updateUser({ 
+        body: { 
+          id: userId, 
+          password: hashed 
+        } 
       });
-
-      logger.info('Password change completed', { userId });
-
-      return {
-        success: true,
-        message: 'Password updated successfully',
+      
+      logger.info('Password changed', { userId });
+      return { 
+        success: true, 
+        message: 'Password updated successfully' 
       };
-    } catch (error: any) {
-      logger.error('Password change error', error, { userId });
-      return {
-        success: false,
-        message: 'Password change failed',
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Password change error', new Error(message), { userId });
+      return { 
+        success: false, 
+        message: 'Password change failed' 
       };
     }
   }
 
   async validateSession(token: string): Promise<SessionData | null> {
     try {
-      const result = await this.auth.api.getSession({
-        headers: {
-          authorization: `Bearer ${token}`,
-        },
+      const res = await this.auth.api.getSession({ 
+        headers: { 
+          authorization: `Bearer ${token}` 
+        } 
       });
-
-      if (result.error || !result.data) {
-        return null;
-      }
-
-      return {
-        userId: result.data.user.id,
-        email: result.data.user.email,
-        name: result.data.user.name,
-        sessionId: result.data.session.id,
+      
+      if (res.error || !res.data) return null;
+      
+      return { 
+        userId: res.data.user.id, 
+        email: res.data.user.email, 
+        name: res.data.user.name, 
+        sessionId: res.data.session.id 
       };
-    } catch (error: any) {
-      logger.error('Session validation error', error, { token });
+    } catch {
       return null;
     }
   }
 
   async verifyMasterPassword(userId: string, masterPassword: string): Promise<boolean> {
     try {
-      const user = await this.auth.api.getUser({ userId });
-      if (!user || !user.masterPassword) {
+      const user = await this.db.select()
+        .from(authSchema.users)
+        .where(eq(authSchema.users.id, userId))
+        .limit(1);
+      
+      if (!user[0] || !user[0].masterPassword) {
         return false;
       }
-
-      return await this.verifyPassword(masterPassword, user.masterPassword);
-    } catch (error: any) {
-      logger.error('Master password verification error', error, { userId });
+      
+      return await this.verifyPassword(masterPassword, user[0].masterPassword);
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Master password verification error', new Error(message), { userId });
       return false;
     }
   }
 
   private generatePasswords(): GeneratedPasswords {
-    return {
-      loginPassword: this.generateSecurePassword(12),
-      masterPassword: this.generateSecurePassword(16),
+    return { 
+      loginPassword: this.generateSecurePassword(12), 
+      masterPassword: this.generateSecurePassword(16) 
     };
   }
 
@@ -492,70 +441,50 @@ export class UserService {
 
   private async handleUserRegistration(user: any, passwords: GeneratedPasswords): Promise<void> {
     try {
-      await this.mailService.sendWelcomeEmail(user.email, {
-        name: user.name,
-        email: user.email,
-        password: passwords.loginPassword,
-        masterPassword: passwords.masterPassword,
-      });
-
+      await this.mailService.sendAccountCreationEmail(
+        user.email, 
+        user.name, 
+        passwords.loginPassword,
+        passwords.masterPassword
+      );
       logger.info('Welcome email dispatched', { userId: user.id, email: user.email });
-    } catch (error: any) {
-      logger.error('Welcome email dispatch failed', error, { 
-        userId: user.id, 
-        email: user.email 
-      });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to send welcome email', new Error(message));
     }
   }
 
   private async handleUserLogin(user: any, request: any): Promise<void> {
     try {
       const clientInfo = this.extractClientInfo(request);
-
-      await this.mailService.sendLoginNotification(user.email, {
-        name: user.name,
-        loginTime: new Date().toLocaleString(),
-        ip: clientInfo.ip,
-        browser: clientInfo.userAgent,
+      await this.mailService.sendLoginNotification(user.email, { 
+        name: user.name, 
+        loginTime: new Date().toISOString(), 
+        ip: clientInfo.ip, 
+        browser: clientInfo.userAgent 
       });
-
-      logger.info('Login notification dispatched', { 
-        userId: user.id, 
-        email: user.email, 
-        ip: clientInfo.ip 
-      });
-    } catch (error: any) {
-      logger.error('Login notification dispatch failed', error, { 
-        userId: user.id, 
-        email: user.email 
-      });
+      logger.info('Login notification dispatched', { userId: user.id, email: user.email, ip: clientInfo.ip });
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Failed to send login notification', new Error(message));
     }
   }
 
   private extractClientInfo(request: any): { ip: string; userAgent: string } {
-    return {
-      ip: request.headers?.['x-forwarded-for'] || request.connection?.remoteAddress || 'Unknown',
-      userAgent: request.headers?.['user-agent'] || 'Unknown',
+    return { 
+      ip: request.headers?.['x-forwarded-for'] || request.connection?.remoteAddress || 'Unknown', 
+      userAgent: request.headers?.['user-agent'] || 'Unknown' 
     };
   }
 
-  private async sendPasswordResetEmail(email: string, resetUrl: string): Promise<void> {
-    try {
-      await this.mailService.sendResetPassword(email, { reset_url: resetUrl });
-      logger.info('Password reset email dispatched', { email });
-    } catch (error: any) {
-      logger.error('Password reset email dispatch failed', error, { email });
-    }
-  }
-
   private transformUserData(user: any): UserResponse {
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      emailVerified: user.emailVerified || false,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
+    return { 
+      id: user.id, 
+      email: user.email, 
+      name: user.name, 
+      emailVerified: user.emailVerified || false, 
+      createdAt: user.createdAt, 
+      updatedAt: user.updatedAt 
     };
   }
 }
