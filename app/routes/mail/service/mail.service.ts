@@ -110,6 +110,37 @@ export class MailService {
     }
   }
 
+  async sendOtpEmail(email: string, otp: string, type: string): Promise<void> {
+    try {
+      console.log('Sending OTP email to:', email);
+      console.log('OTP email data:', { email, otp: '***', type });
+
+      const html = await this.loadTemplate('otp', {
+        otp: otp,
+        loginTime: new Date().toLocaleString()
+      });
+
+      const result = await this.resend.emails.send({
+        from: 'resure Security <security@yssh.dev>',
+        to: [email],
+        subject: 'Your Login Verification Code',
+        html
+      });
+
+      console.log('OTP email Resend API response:', JSON.stringify(result, null, 2));
+
+      if (result.error) {
+        console.error('OTP email Resend API error:', JSON.stringify(result.error, null, 2));
+        throw new Error(`Resend API error: ${result.error.message}`);
+      }
+
+      console.log('OTP email sent successfully:', result.data?.id);
+    } catch (error) {
+      console.error('Error sending OTP email:', error);
+      throw error;
+    }
+  }
+
   async sendLoginNotification(email: string, data: LoginNotificationData): Promise<void> {
     try {
       console.log('Sending login notification to:', email);

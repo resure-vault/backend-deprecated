@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { emailOTP } from "better-auth/plugins";
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { logger } from '../../../common/logger';
@@ -50,6 +51,7 @@ export class UserService {
           session: authSchema.sessions,
           account: authSchema.accounts,
           verificationToken: authSchema.verificationTokens,
+          verification: authSchema.verification,
         },
       }),
       emailAndPassword: {
@@ -82,6 +84,17 @@ export class UserService {
           },
         ],
       },
+      plugins: [
+        emailOTP({
+          async sendVerificationOTP({ email, otp, type }) {
+            const mailService = MailService.getInstance();
+            await mailService.sendOtpEmail(email, otp, type);
+          },
+          otpLength: 6,
+          expiresIn: 600, // 10 minutes
+          allowedAttempts: 10,
+        })
+      ],
     });
   }
 
@@ -89,15 +102,11 @@ export class UserService {
     try {
       logger.info('User signup attempt', { email: data.email });
       
-      // Generate secure passwords
       const passwords = this.generatePasswords();
       const name = this.extractNameFromEmail(data.email);
-      
-      // Hash passwords
       const hashedLoginPassword = await this.hashPassword(passwords.loginPassword);
       const hashedMasterPassword = await this.hashPassword(passwords.masterPassword);
       
-      // Direct database insertion
       const [user] = await this.db.insert(authSchema.users).values({
         email: data.email,
         name: name,
@@ -111,7 +120,6 @@ export class UserService {
         updatedAt: new Date(),
       }).returning();
 
-      // Send welcome email with resure branding
       await this.mailService.sendAccountCreationEmail(
         user.email, 
         user.name, 
@@ -486,5 +494,92 @@ export class UserService {
       createdAt: user.createdAt, 
       updatedAt: user.updatedAt 
     };
+  }
+
+  // OTP Methods
+  async sendLoginOTP(email: string): Promise<any> {
+    try {
+      const result = await this.auth.api.sendVerificationOTP({
+        body: {
+          email,
+          type: 'sign-in'
+        }
+      });
+      return result;
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Send login OTP error', new Error(message), { email });
+      throw error;
+    }
+  }
+
+  async verifyLoginOTP(email: string, otp: string, req?: any): Promise<any> {
+    try {
+      // Extract IP address and user agent from request
+      const ipAddress = req?.ip || req?.headers['x-forwarded-for'] || req?.connection?.remoteAddress || '127.0.0.1';
+      const userAgent = req?.headers['user-agent'] || 'Unknown';
+      
+      logger.info('Attempting OTP verification', { email, ipAddress, userAgent });
+      
+      const existingUser = await this.db.select()
+        .from(authSchema.users)
+        .where(eq(authSchema.users.email, email))
+        .limit(1);
+      
+      if (!existingUser[0]) {
+        logger.error('User not found for OTP verification', new Error('User not found'), { email });
+        throw new Error('User not found');
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      const result = await this.auth.api.signInEmailOTP({
+        body: {
+          email,
+          otp
+        },
+        headers: {
+          ...req?.headers || {},
+          'x-forwarded-for': ipAddress,
+          'user-agent': userAgent
+        }
+      });
+      
+      logger.info('OTP verification successful', { email, userId: result.data?.user?.id });
+      logger.info('Full OTP verification result', { email, result });
+      return result;
+    } catch (error: unknown) {
+      const message = getErrorMessage(error);
+      logger.error('Verify login OTP error', new Error(message), { email });
+      
+      if (message.includes('duplicate key') || message.includes('already exists')) {
+        logger.warn('Retrying OTP verification due to duplicate key error', { email });
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const retryIpAddress = req?.ip || req?.headers['x-forwarded-for'] || req?.connection?.remoteAddress || '127.0.0.1';
+        const retryUserAgent = req?.headers['user-agent'] || 'Unknown';
+        
+        try {
+          const retryResult = await this.auth.api.signInEmailOTP({
+            body: {
+              email,
+              otp
+            },
+            headers: {
+              ...req?.headers || {},
+              'x-forwarded-for': retryIpAddress,
+              'user-agent': retryUserAgent
+            }
+          });
+          logger.info('OTP verification retry successful', { email });
+          return retryResult;
+        } catch (retryError: unknown) {
+          const retryMessage = getErrorMessage(retryError);
+          logger.error('OTP verification retry failed', new Error(retryMessage), { email });
+        }
+      }
+      
+      throw error;
+    }
   }
 }

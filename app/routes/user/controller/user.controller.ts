@@ -95,6 +95,126 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// OTP Login Endpoints
+router.post('/send-login-otp', async (req, res) => {
+  try {
+    const { email } = req.body || {};
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const result = await userService.sendLoginOTP(email);
+
+    logger.http('Login OTP sent', {
+      email,
+      success: true,
+      ip: req.ip
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'OTP sent to your email address',
+      data: result
+    });
+  } catch (error: any) {
+    logger.error('Send login OTP error', error, { ip: req.ip });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to send OTP'
+    });
+  }
+});
+
+const otpVerificationCache = new Map<string, number>();
+const CACHE_DURATION = 5000; // 5 seconds
+
+router.post('/verify-login-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body || {};
+
+    if (!email || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and OTP are required'
+      });
+    }
+
+    const requestKey = `${email}:${otp}:${req.ip}`;
+    const now = Date.now();
+    
+    const lastRequest = otpVerificationCache.get(requestKey);
+    if (lastRequest && (now - lastRequest) < CACHE_DURATION) {
+      return res.status(429).json({
+        success: false,
+        message: 'Please wait before retrying'
+      });
+    }
+    
+    otpVerificationCache.set(requestKey, now);
+    
+    for (const [key, timestamp] of otpVerificationCache.entries()) {
+      if (now - timestamp > CACHE_DURATION) {
+        otpVerificationCache.delete(key);
+      }
+    }
+
+    const result = await userService.verifyLoginOTP(email, otp, req);
+
+    logger.info('OTP verification result structure', { 
+      email, 
+      hasResult: !!result,
+      hasData: !!result?.data,
+      hasSession: !!result?.session,
+      hasUser: !!result?.user,
+      hasToken: !!result?.token,
+      hasDataSession: !!result?.data?.session,
+      hasDataUser: !!result?.data?.user,
+      keys: result ? Object.keys(result) : [],
+      dataKeys: result?.data ? Object.keys(result.data) : []
+    });
+
+    if ((result.token && result.user) || (result.data?.session && result.data?.user)) {
+      const sessionToken = result.token || result.data?.session?.token;
+      const userData = result.user || result.data?.user;
+      
+      logger.http('OTP Login successful', {
+        email,
+        userId: userData?.id,
+        ip: req.ip
+      });
+
+      res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        data: {
+          user: userData,
+          token: sessionToken
+        }
+      });
+    } else {
+      logger.http('OTP Login failed', {
+        email,
+        ip: req.ip
+      });
+
+      res.status(401).json({
+        success: false,
+        message: 'Invalid OTP or expired'
+      });
+    }
+  } catch (error: any) {
+    logger.error('Verify login OTP error', error, { ip: req.ip });
+    res.status(500).json({
+      success: false,
+      message: 'Failed to verify OTP'
+    });
+  }
+});
+
 router.post('/verify-master-password', authMiddleware, async (req, res) => {
   try {
     const { masterPassword } = req.body || {};
