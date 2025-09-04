@@ -15,16 +15,38 @@ class Application {
   constructor() {
     this.app = express();
     this.databaseService = new DatabaseService();
-    this.configureMiddleware();
-    this.configureHealthCheck();
   }
 
   private configureMiddleware(): void {
     logger.info('Configuring application middleware');
-    this.app.use(cors());
-    this.app.use(express.json({ limit: '10mb' }));
-    this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-    logger.info('Application middleware configured');
+    
+    this.app.use(cors({
+      origin: true,
+      credentials: true,
+    }));
+    
+    this.app.use(express.json({ 
+      limit: '10mb',
+      strict: false
+    }));
+    
+    this.app.use(express.urlencoded({ 
+      extended: true, 
+      limit: '10mb' 
+    }));
+
+    this.app.use((req, res, next) => {
+      logger.debug('Request received', {
+        method: req.method,
+        url: req.url,
+        body: req.body,
+        headers: req.headers,
+        ip: req.ip
+      });
+      next();
+    });
+    
+    logger.info('Application middleware configured successfully');
   }
 
   private configureHealthCheck(): void {
@@ -57,7 +79,6 @@ class Application {
       this.userModule = new UserModule(this.databaseService.getDrizzle());
       logger.info('User service module initialized with authentication');
       
-      this.configureRoutes();
       logger.info('All application modules initialized successfully');
     } catch (error) {
       logger.error('Module initialization failed', error as Error);
@@ -79,6 +100,12 @@ class Application {
     }
 
     this.app.use((req, res) => {
+      logger.warn('404 - Route not found', {
+        method: req.method,
+        path: req.originalUrl,
+        ip: req.ip
+      });
+      
       res.status(404).json({
         success: false,
         message: 'Endpoint not found',
@@ -143,8 +170,12 @@ class Application {
         platform: process.platform
       });
 
+      this.configureMiddleware();
+      this.configureHealthCheck();
+      
       await this.initializeDatabase();
       this.initializeModules();
+      this.configureRoutes();
       this.setupGracefulShutdown();
 
       const port = await this.findAvailablePort();

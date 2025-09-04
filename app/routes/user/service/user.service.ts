@@ -52,7 +52,7 @@ export class UserService {
       }),
       emailAndPassword: {
         enabled: true,
-        requireEmailVerification: true,
+        requireEmailVerification: false,
         sendResetPassword: async ({ user, url }: { user: any; url: string }): Promise<void> => {
           await this.sendPasswordResetEmail(user.email, url);
         },
@@ -65,7 +65,7 @@ export class UserService {
           },
           masterPassword: {
             type: "string",
-            required: true,
+            required: false,
           },
         },
       },
@@ -74,6 +74,10 @@ export class UserService {
           enabled: true,
           maxAge: 60 * 60 * 24 * 7,
         },
+      },
+      logger: {
+        level: "debug",
+        disabled: false,
       },
       callbacks: {
         after: [
@@ -105,22 +109,50 @@ export class UserService {
       const passwords = this.generatePasswords();
       const name = this.extractNameFromEmail(data.email);
 
+      logger.debug('Attempting better-auth signup', {
+        email: data.email,
+        hasPassword: !!passwords.loginPassword,
+        hasMasterPassword: !!passwords.masterPassword,
+        name
+      });
+
       const result = await this.auth.api.signUpEmail({
         body: {
           email: data.email,
           password: passwords.loginPassword,
           name: name,
-          masterPassword: await this.hashPassword(passwords.masterPassword),
         },
       });
 
       if (result.error) {
-        logger.error('User signup failed', new Error(result.error.message), { email: data.email });
+        logger.error('Better-auth signup failed', new Error(JSON.stringify(result.error)), {
+          email: data.email,
+          error: result.error,
+          errorCode: result.error.code,
+          errorType: result.error.type,
+          errorMessage: result.error.message,
+          errorStack: result.error.stack || 'No stack trace',
+          fullError: JSON.stringify(result.error, null, 2)
+        });
         return {
           success: false,
-          message: result.error.message,
-          error: result.error.message,
+          message: result.error.message || 'Account creation failed',
+          error: result.error.message || 'Failed to create user',
         };
+      }
+
+      if (result.data?.user) {
+        try {
+          const hashedMasterPassword = await this.hashPassword(passwords.masterPassword);
+          await this.db.update(authSchema.users)
+            .set({ masterPassword: hashedMasterPassword })
+            .where(eq(authSchema.users.id, result.data.user.id));
+        } catch (updateError: any) {
+          logger.error('Failed to update master password', updateError, {
+            userId: result.data.user.id,
+            email: data.email
+          });
+        }
       }
 
       await this.handleUserRegistration(result.data.user, passwords);
@@ -138,7 +170,13 @@ export class UserService {
         masterPassword: passwords.masterPassword,
       };
     } catch (error: any) {
-      logger.error('User signup error', error, { email: data.email });
+      logger.error('User signup error', error, {
+        email: data.email,
+        errorMessage: error.message,
+        errorStack: error.stack,
+        errorName: error.name,
+        fullError: JSON.stringify(error, Object.getOwnPropertyNames(error), 2)
+      });
       return {
         success: false,
         message: 'Account creation failed',
@@ -442,7 +480,7 @@ export class UserService {
     
     const parts = email.split('@');
     return parts[0] || 'user';
-  }  
+  }
 
   private async hashPassword(password: string): Promise<string> {
     return bcrypt.hash(password, 12);

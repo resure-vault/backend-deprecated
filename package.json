@@ -4,7 +4,11 @@
     "dev": "bun --hot run app/main.ts",
     "start": "bun run app/main.ts",
     "docker:up": "cd docker && docker-compose up -d",
-    "docker:down": "cd docker && docker-compose down"
+    "docker:down": "cd docker && docker-compose down",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@dotenvx/dotenvx": "^1.49.0",

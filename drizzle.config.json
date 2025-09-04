@@ -1,0 +1,16 @@
+{
+    "schema": "./app/microservices/schema/schema.ts",
+    "out": "./drizzle",
+    "dialect": "postgresql",
+    "dbCredentials": {
+      "host": "localhost",
+      "port": 5432,
+      "user": "secured",
+      "password": "notsecured",
+      "database": "sm",
+      "ssl": false
+    },
+    "verbose": true,
+    "strict": true
+  }
+  
