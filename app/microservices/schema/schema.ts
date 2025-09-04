@@ -20,6 +20,9 @@ export const sessions = pgTable('sessions', {
   token: text('token').unique().notNull(),
   expiresAt: timestamp('expires_at').notNull(),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
 });
 
 export const accounts = pgTable('accounts', {
@@ -64,6 +67,15 @@ export const emailLogs = pgTable('email_logs', {
   sentAt: timestamp('sent_at').defaultNow().notNull(),
   error: text('error'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
+export const verification = pgTable('verification', {
+  id: text('id').primaryKey().notNull(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // Export types

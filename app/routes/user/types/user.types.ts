@@ -59,4 +59,3 @@ export interface CreateUserRequest {
     loginPassword: string;
     masterPassword: string;
   }
-  

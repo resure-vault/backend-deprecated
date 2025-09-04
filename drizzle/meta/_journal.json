@@ -8,6 +8,20 @@
       "when": 1756957446217,
       "tag": "0000_silly_scream",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1756986440436,
+      "tag": "0001_magenta_moira_mactaggert",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1756986997037,
+      "tag": "0002_safe_kabuki",
+      "breakpoints": true
     }
   ]
 }

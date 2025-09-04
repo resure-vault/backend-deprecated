@@ -1,8 +1,9 @@
 import express from 'express';
+import type { Request, Response } from 'express';
 import { MailService } from '../service/mail.service';
 
 const router = express.Router();
-const mailService = new MailService();
+const mailService = MailService.getInstance();
 
 router.post('/send', async (req, res) => {
   try {
@@ -37,19 +38,6 @@ router.post('/test-send', async (req, res) => {
     }
     await mailService.sendTestEmail(email);
     res.json({ success: true, message: 'Test email sent' });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.post('/send/welcome', async (req, res) => {
-  try {
-    const { email, name, password, masterPassword } = req.body;
-    if (!email || !name || !password || !masterPassword) {
-      return res.status(400).json({ error: 'All fields required' });
-    }
-    await mailService.sendWelcomeEmail(email, { name, email, password, masterPassword });
-    res.json({ success: true, message: 'Welcome email sent' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
