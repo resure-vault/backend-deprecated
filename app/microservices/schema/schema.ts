@@ -78,6 +78,17 @@ export const verification = pgTable('verification', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
+export const userLogs = pgTable('user_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  event: text('event').notNull(),
+  details: text('details').notNull().default('{}'),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  timestamp: timestamp('timestamp').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 // Export types
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;
@@ -87,3 +98,5 @@ export type EmailTemplate = typeof emailTemplates.$inferSelect;
 export type NewEmailTemplate = typeof emailTemplates.$inferInsert;
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type NewEmailLog = typeof emailLogs.$inferInsert;
+export type UserLog = typeof userLogs.$inferSelect;
+export type NewUserLog = typeof userLogs.$inferInsert;

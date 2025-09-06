@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { MailModule } from './routes/mail/mail.module';
 import { UserModule } from './routes/user/user.module';
+import { LoggingModule } from './routes/logging/logging.module';
 import { DatabaseService } from './microservices/database';
 import { logger } from './common/logger';
 import { config } from './config/config';
@@ -11,6 +12,7 @@ class Application {
   private readonly databaseService: DatabaseService;
   private mailModule?: MailModule;
   private userModule?: UserModule;
+  private loggingModule?: LoggingModule;
 
   constructor() {
     this.app = express();
@@ -79,6 +81,9 @@ class Application {
       this.userModule = new UserModule(this.databaseService.getDrizzle());
       logger.info('User service module initialized with authentication');
       
+      this.loggingModule = new LoggingModule(this.databaseService.getDrizzle());
+      logger.info('Logging service module initialized');
+      
       logger.info('All application modules initialized successfully');
     } catch (error) {
       logger.error('Module initialization failed', error as Error);
@@ -97,6 +102,11 @@ class Application {
     if (this.userModule) {
       this.app.use('/api/auth', this.userModule.getRouter());
       logger.info('Authentication API routes mounted on /api/auth');
+    }
+
+    if (this.loggingModule) {
+      this.app.use('/api/logging', this.loggingModule.getRouter());
+      logger.info('Logging API routes mounted on /api/logging');
     }
 
     this.app.use((req, res) => {
